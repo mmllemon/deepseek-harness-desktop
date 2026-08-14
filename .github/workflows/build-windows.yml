@@ -86,20 +86,30 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # Tauri 期望外部二进制位于 src-tauri/binaries/<command>-<triple>.exe
-      # 必须紧贴 Tauri build 之前执行，且复制后用 Test-Path 强校验存在性，
-      # 否则 Tauri build 的自定义 build script 会报 "resource path ... doesn't exist"。
-      - name: Stage node.exe sidecar (verified)
+      # 外部二进制（externalBin）随安装包分发。
+      # 关键坑（已用 tauri-build 2.6.3 / tauri-utils 2.9.3 源码核实）：
+      #   externalBin 条目经 tauri_utils::resources::external_binaries 仅生成裸文件名
+      #   `node-x86_64-pc-windows-msvc.exe`（不含 binaries/ 前缀），随后 ResourcePaths
+      #   把它当作【相对路径】按 build script 的 CWD（cargo 固定 = src-tauri crate 目录）
+      #   做 exists() 校验。因此 tauri-build 实际检查的是 src-tauri/node-x86_64-pc-windows-msvc.exe，
+      #   而非文档里写的 src-tauri/binaries/。
+      # 修复：把 node sidecar 同时放到两个位置，覆盖任一约定，且不动 externalBin:["node"]
+      # 与 sidecar("node") 的任何代码。复制后逐一 Test-Path 强校验。
+      - name: Stage node.exe sidecar (verified, dual location)
         shell: pwsh
         run: |
-          $binDir = Join-Path $PWD "src-tauri/binaries"
-          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
           $node = (Get-Command node -ErrorAction Stop).Source
           if (-not (Test-Path $node)) { Write-Error "node executable not found at: $node"; exit 1 }
-          $dest = Join-Path $binDir "node-x86_64-pc-windows-msvc.exe"
-          Copy-Item -Path $node -Destination $dest -Force
-          if (-not (Test-Path $dest)) { Write-Error "failed to stage node sidecar at: $dest"; exit 1 }
-          Write-Host "staged node sidecar: $dest ($([math]::Round((Get-Item $dest).Length/1MB,2)) MB)"
+          $candidates = @(
+            (Join-Path $PWD "src-tauri/node-x86_64-pc-windows-msvc.exe"),
+            (Join-Path $PWD "src-tauri/binaries/node-x86_64-pc-windows-msvc.exe")
+          )
+          foreach ($dest in $candidates) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+            Copy-Item -Path $node -Destination $dest -Force
+            if (-not (Test-Path $dest)) { Write-Error "failed to stage node sidecar at: $dest"; exit 1 }
+            Write-Host "staged node sidecar: $dest ($([math]::Round((Get-Item $dest).Length/1MB,2)) MB)"
+          }
 
       - name: Tauri build
         id: tauri
