@@ -74,7 +74,7 @@ jobs:
         run: pwsh desktop/scripts/build-harness.ps1 -HarnessDir ./deepseek-harness
 
       # ---- Tier 2 sidecar: pnpm deploy harness -> dsh-dist (self-contained node_modules) ----
-      - name: Bundle dsh sidecar (Tier 2: node.exe + node_modules)
+      - name: "Bundle dsh sidecar (Tier 2: node.exe + node_modules)"
         shell: pwsh
         run: pwsh desktop/scripts/bundle-dsh.ps1 -HarnessDir ./deepseek-harness -OutDir ./dsh-dist
 
