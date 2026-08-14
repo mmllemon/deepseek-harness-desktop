@@ -38,8 +38,8 @@ function Restore-Landlock {
 }
 
 try {
-    $isWindows = ($env:OS -eq 'Windows_NT') -or $IsWindows
-    if ($isWindows -and (Test-Path $landlockSrc)) {
+    $runningWindows = ($env:OS -eq 'Windows_NT') -or $IsWindows
+    if ($runningWindows -and (Test-Path $landlockSrc)) {
         $stashName = "landlock-run.stash." + [System.Guid]::NewGuid().ToString("N")
         $stashDir  = Join-Path $env:TEMP $stashName
         Move-Item -Path $landlockSrc -Destination $stashDir -Force
