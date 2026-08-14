@@ -34,7 +34,9 @@ $outAbs = (Resolve-Path $OutDir).Path
 Write-Host "==> pnpm deploy @deepseek-ai/dsh -> $outAbs"
 Push-Location $hDir
 try {
-    pnpm deploy --filter @deepseek-ai/dsh --prod $outAbs
+    # --legacy: pnpm v10+ only deploys from workspaces with inject-workspace-packages=true
+    # by default; upstream deepseek-harness has no such config, so force legacy deploy.
+    pnpm deploy --legacy --filter @deepseek-ai/dsh --prod $outAbs
     if ($LASTEXITCODE -ne 0) { throw "pnpm deploy failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
