@@ -1,0 +1,131 @@
+name: Build Windows (Tauri 2 + Node22 SEA)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (desktop repo)
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm 11.7.0
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust toolchain (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # ---- Pin & clone upstream deepseek-harness at the locked SHA ----
+      # Single source of truth = UPSTREAM.lock.json. CI 不会使用未锁定的上游提交。
+      - name: Pin & clone upstream harness
+        shell: pwsh
+        run: |
+          $lock = Get-Content UPSTREAM.lock.json -Raw | ConvertFrom-Json
+          $sha  = $lock.harness.sha
+          $repo = $lock.harness.repo
+          if ($sha -like '*<*') { Write-Error "UPSTREAM.lock.json 的 sha 仍为占位符，请先填入真实提交号"; exit 1 }
+          Write-Host "Cloning $repo @ $sha"
+          git clone --no-checkout "https://github.com/$repo.git" deepseek-harness
+          git -C deepseek-harness checkout $sha
+
+      - name: Cache harness build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            deepseek-harness/apps/cli/lib
+            deepseek-harness/apps/web/dist
+            deepseek-harness/packages/**/lib
+          key: harness-${{ hashFiles('deepseek-harness/pnpm-lock.yaml') }}-${{ hashFiles('deepseek-harness/tsdown.config.ts') }}
+          restore-keys: |
+            harness-
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-${{ hashFiles('deepseek-harness/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-
+
+      - name: Cache dsh.exe (SEA sidecar)
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/dsh.exe
+            src-tauri/externalBin/dsh-x86_64-pc-windows-msvc.exe
+          key: dsh-${{ hashFiles('deepseek-harness/apps/cli/lib/**', 'deepseek-harness/apps/web/dist/**', 'scripts/sea-config.json', 'scripts/seapack.cjs') }}
+          restore-keys: |
+            dsh-
+
+      - name: Build harness
+        shell: pwsh
+        run: pwsh desktop/scripts/build-harness.ps1 -HarnessDir ./deepseek-harness
+
+      - name: SEA pack dsh.exe
+        shell: pwsh
+        run: node scripts/seapack.cjs
+
+      - name: Copy sidecar into externalBin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/externalBin | Out-Null
+          Copy-Item -Path dist/dsh.exe -Destination src-tauri/externalBin/dsh-x86_64-pc-windows-msvc.exe -Force
+
+      - name: npm ci (frontend deps)
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Tauri build
+        id: tauri
+        run: npm run tauri build
+
+      # ---- code signing (placeholder) ----
+      # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
+      # - name: Azure Trusted Signing
+      #   uses: azure/trusted-signing-action@v0
+      #   with:
+      #     endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      #     trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT }}
+      #     certificate-profile-name: ${{ secrets.AZURE_TS_PROFILE }}
+      #     files: |
+      #       src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+
+      - name: Smoke test (section 12.6 acceptance gate)
+        shell: pwsh
+        run: pwsh desktop/scripts/smoke.ps1 -DshPath ./dist/dsh.exe
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+      - name: Upload installer artifact
+        if: ${{ always() && steps.tauri.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-desktop-windows
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
+          if-no-files-found: warn

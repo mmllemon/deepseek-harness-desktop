@@ -1,0 +1,14 @@
+{
+  "harness": {
+    "repo": "deepseek-ai/deepseek-harness",
+    "branch": "master",
+    "sha": "47f943859bef60e4160492346772ded9b24f765a",
+    "npmVersion": "0.1.0-rc (see repo releases)",
+    "pkgVersion": "pin-at-build",
+    "date": "2026-08-13",
+    "ciRunId": "<fill-after-first-ci-run>"
+  },
+  "desktopShell": "tauri",
+  "dshExeSha": "<sha256-of-dsh-x86_64-pc-windows-msvc.exe>",
+  "bumpLog": []
+}

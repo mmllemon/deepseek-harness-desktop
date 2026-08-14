@@ -1,0 +1,26 @@
+# Node / frontend
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Sidecar 二进制：不入库，按 UPSTREAM.lock.json 的 dshExeSha 重建（见文档 §13.7）
+src-tauri/externalBin/*.exe
+
+# 本地侧载资源（node.exe / node_modules / .node），构建期生成
+native-mods/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+
+# 用户数据（运行时生成）
+*.local

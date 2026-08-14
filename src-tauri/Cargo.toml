@@ -1,0 +1,41 @@
+[package]
+name = "deepseek-harness-desktop"
+version = "0.1.0"
+description = "DeepSeek Harness 桌面端 (Tauri 2)"
+authors = ["DeepSeek Harness Desktop"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = { version = "2", features = ["shell-sidecar"] }
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "1"
+rand = "0.8"
+base64 = "0.22"
+keyring = "3"
+dirs = "5"
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+reqwest = { version = "0.12", features = ["stream", "json"] }
+futures-util = "0.3"
+tokio-util = "0.7"
+url = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_ProcessStatus",
+] }
+
+[features]
+# default features nothing special
+default = []

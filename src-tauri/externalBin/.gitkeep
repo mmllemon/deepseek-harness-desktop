@@ -1,0 +1,3 @@
+# 此目录放置由 Node 22 SEA 产出的单文件 sidecar 二进制。
+# 命名须带目标三元组后缀：dsh-x86_64-pc-windows-msvc.exe
+# 该二进制不入库（见 .gitignore），由 CI/本地构建按 UPSTREAM.lock.json 的 dshExeSha 重建。
