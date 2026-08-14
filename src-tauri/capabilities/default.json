@@ -11,7 +11,6 @@
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-set-focus",
-    "core:webview:allow-navigate",
     "core:webview:default",
     "updater:default",
     {
