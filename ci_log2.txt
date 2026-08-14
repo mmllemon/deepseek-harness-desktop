@@ -1,0 +1,636 @@
+﻿2026-08-14T15:28:32.2805715Z Current runner version: '2.336.0'
+2026-08-14T15:28:32.2833498Z ##[group]Runner Image Provisioner
+2026-08-14T15:28:32.2834800Z Hosted Compute Agent
+2026-08-14T15:28:32.2835493Z Version: 20260729.566
+2026-08-14T15:28:32.2836392Z Commit: cf7153fe6e25b664e8693c24944bf2b00355d109
+2026-08-14T15:28:32.2837369Z Build Date: 2026-07-29T19:17:02Z
+2026-08-14T15:28:32.2838321Z Worker ID: {5d8e047b-d3f0-433e-abf4-875a1424cda1}
+2026-08-14T15:28:32.2839283Z Azure Region: westus2
+2026-08-14T15:28:32.2840023Z ##[endgroup]
+2026-08-14T15:28:32.2842108Z ##[group]Operating System
+2026-08-14T15:28:32.2842910Z Microsoft Windows Server 2025
+2026-08-14T15:28:32.2843817Z 10.0.26100
+2026-08-14T15:28:32.2844573Z Datacenter
+2026-08-14T15:28:32.2845093Z ##[endgroup]
+2026-08-14T15:28:32.2845852Z ##[group]Runner Image
+2026-08-14T15:28:32.2846471Z Image: windows-2025-vs2026
+2026-08-14T15:28:32.2847360Z Version: 20260810.198.2
+2026-08-14T15:28:32.2850000Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260810.198/images/windows/Windows2025-VS2026-Readme.md
+2026-08-14T15:28:32.2852134Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260810.198
+2026-08-14T15:28:32.2853149Z ##[endgroup]
+2026-08-14T15:28:32.2854166Z ##[group]GITHUB_TOKEN Permissions
+2026-08-14T15:28:32.2856255Z Contents: read
+2026-08-14T15:28:32.2856833Z Metadata: read
+2026-08-14T15:28:32.2857393Z ##[endgroup]
+2026-08-14T15:28:32.2859497Z Secret source: Actions
+2026-08-14T15:28:32.2860539Z Prepare workflow directory
+2026-08-14T15:28:32.3304064Z Prepare all required actions
+2026-08-14T15:28:32.3372719Z Getting action download info
+2026-08-14T15:28:32.7074824Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-08-14T15:28:32.8320288Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+2026-08-14T15:28:33.0813553Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-08-14T15:28:33.2391569Z Download action repository 'dtolnay/rust-toolchain@stable' (SHA:4360b52568e2003a75bf9bc1d59f33a8e3fc893c)
+2026-08-14T15:28:33.3982924Z Download action repository 'Swatinem/rust-cache@v2' (SHA:6323deb102c322ba6fcbdcafc7e3dddab59af2b6)
+2026-08-14T15:28:33.6701476Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-08-14T15:28:33.8093296Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-08-14T15:28:34.3664819Z Complete job name: build-windows
+2026-08-14T15:28:34.6150346Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:28:34.6163181Z ##[group]Run actions/checkout@v4
+2026-08-14T15:28:34.6164384Z with:
+2026-08-14T15:28:34.6165513Z   repository: mmllemon/deepseek-harness-desktop
+2026-08-14T15:28:34.6172478Z   token: ***
+2026-08-14T15:28:34.6173250Z   ssh-strict: true
+2026-08-14T15:28:34.6173996Z   ssh-user: git
+2026-08-14T15:28:34.6174769Z   persist-credentials: true
+2026-08-14T15:28:34.6175581Z   clean: true
+2026-08-14T15:28:34.6176575Z   sparse-checkout-cone-mode: true
+2026-08-14T15:28:34.6177670Z   fetch-depth: 1
+2026-08-14T15:28:34.6178654Z   fetch-tags: false
+2026-08-14T15:28:34.6179534Z   show-progress: true
+2026-08-14T15:28:34.6180297Z   lfs: false
+2026-08-14T15:28:34.6181045Z   submodules: false
+2026-08-14T15:28:34.6181816Z   set-safe-directory: true
+2026-08-14T15:28:34.6182692Z   allow-unsafe-pr-checkout: false
+2026-08-14T15:28:34.6183968Z ##[endgroup]
+2026-08-14T15:28:34.8221380Z Syncing repository: mmllemon/deepseek-harness-desktop
+2026-08-14T15:28:34.8224655Z ##[group]Getting Git version info
+2026-08-14T15:28:34.8226777Z Working directory is 'D:\a\deepseek-harness-desktop\deepseek-harness-desktop'
+2026-08-14T15:28:34.9218151Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-08-14T15:28:35.9822592Z git version 2.55.0.windows.3
+2026-08-14T15:28:35.9877543Z ##[endgroup]
+2026-08-14T15:28:35.9900042Z Temporarily overriding HOME='D:\a\_temp\b363c549-eadd-406f-8742-8c619445b174' before making global git config changes
+2026-08-14T15:28:35.9903824Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-14T15:28:35.9913950Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\deepseek-harness-desktop\deepseek-harness-desktop
+2026-08-14T15:28:36.0261354Z Deleting the contents of 'D:\a\deepseek-harness-desktop\deepseek-harness-desktop'
+2026-08-14T15:28:36.0268532Z ##[group]Initializing the repository
+2026-08-14T15:28:36.0278853Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\deepseek-harness-desktop\deepseek-harness-desktop
+2026-08-14T15:28:36.0783782Z Initialized empty Git repository in D:/a/deepseek-harness-desktop/deepseek-harness-desktop/.git/
+2026-08-14T15:28:36.0832463Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/mmllemon/deepseek-harness-desktop
+2026-08-14T15:28:36.1173906Z ##[endgroup]
+2026-08-14T15:28:36.1175996Z ##[group]Disabling automatic garbage collection
+2026-08-14T15:28:36.1183727Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-08-14T15:28:36.1664497Z ##[endgroup]
+2026-08-14T15:28:36.1666840Z ##[group]Setting up auth
+2026-08-14T15:28:36.1685131Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-08-14T15:28:36.2052651Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-08-14T15:28:37.4725912Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-14T15:28:37.5037979Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-08-14T15:28:38.0376492Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-14T15:28:38.0677051Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-08-14T15:28:38.6141648Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-08-14T15:28:38.6455385Z ##[endgroup]
+2026-08-14T15:28:38.6456196Z ##[group]Fetching the repository
+2026-08-14T15:28:38.6469923Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +349e0dee0012bc8863aa4f35226da7e18b536d1f:refs/remotes/origin/main
+2026-08-14T15:28:39.4503733Z From https://github.com/mmllemon/deepseek-harness-desktop
+2026-08-14T15:28:39.4504700Z  * [new ref]         349e0dee0012bc8863aa4f35226da7e18b536d1f -> origin/main
+2026-08-14T15:28:39.4545326Z ##[endgroup]
+2026-08-14T15:28:39.4546181Z ##[group]Determining the checkout info
+2026-08-14T15:28:39.4548005Z ##[endgroup]
+2026-08-14T15:28:39.4561236Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-08-14T15:28:39.4901269Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-08-14T15:28:39.5213427Z ##[group]Checking out the ref
+2026-08-14T15:28:39.5222717Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B main refs/remotes/origin/main
+2026-08-14T15:28:39.5762752Z Switched to a new branch 'main'
+2026-08-14T15:28:39.5781118Z branch 'main' set up to track 'origin/main'.
+2026-08-14T15:28:39.5821755Z ##[endgroup]
+2026-08-14T15:28:39.6142260Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-08-14T15:28:39.6408294Z 349e0dee0012bc8863aa4f35226da7e18b536d1f
+2026-08-14T15:28:39.6835073Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:28:39.6836967Z ##[group]Run pnpm/action-setup@v4
+2026-08-14T15:28:39.6837228Z with:
+2026-08-14T15:28:39.6837410Z   version: 11.7.0
+2026-08-14T15:28:39.6837598Z   dest: ~/setup-pnpm
+2026-08-14T15:28:39.6837789Z   run_install: null
+2026-08-14T15:28:39.6837966Z   cache: false
+2026-08-14T15:28:39.6838183Z   cache_dependency_path: pnpm-lock.yaml
+2026-08-14T15:28:39.6838484Z   package_json_file: package.json
+2026-08-14T15:28:39.6838720Z   standalone: false
+2026-08-14T15:28:39.6838929Z ##[endgroup]
+2026-08-14T15:28:39.8654409Z ##[group]Running self-installer...
+2026-08-14T15:28:40.3676725Z (node:6640) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-08-14T15:28:40.3678600Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-14T15:28:40.5566084Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-14T15:28:40.5676911Z Packages: +1
+2026-08-14T15:28:40.5677250Z +
+2026-08-14T15:28:41.5589805Z Progress: resolved 1, reused 0, downloaded 1, added 0
+2026-08-14T15:28:41.9538682Z Progress: resolved 1, reused 0, downloaded 1, added 1, done
+2026-08-14T15:28:42.0219193Z 
+2026-08-14T15:28:42.0219786Z dependencies:
+2026-08-14T15:28:42.0220162Z + pnpm 11.7.0 (11.21.0 is available)
+2026-08-14T15:28:42.0220483Z 
+2026-08-14T15:28:42.0338563Z Done in 1.9s
+2026-08-14T15:28:42.0533773Z ##[endgroup]
+2026-08-14T15:28:42.0534177Z Installation Completed!
+2026-08-14T15:28:42.0901354Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:28:42.0902675Z ##[group]Run actions/setup-node@v4
+2026-08-14T15:28:42.0902912Z with:
+2026-08-14T15:28:42.0903082Z   node-version: 22
+2026-08-14T15:28:42.0903268Z   always-auth: false
+2026-08-14T15:28:42.0903463Z   check-latest: false
+2026-08-14T15:28:42.0905833Z   token: ***
+2026-08-14T15:28:42.0906007Z env:
+2026-08-14T15:28:42.0906268Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:42.0906576Z ##[endgroup]
+2026-08-14T15:28:42.2622156Z Found in cache @ C:\hostedtoolcache\windows\node\22.23.2\x64
+2026-08-14T15:28:42.2628855Z (node:868) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-08-14T15:28:42.2629595Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-14T15:28:42.2632578Z ##[group]Environment details
+2026-08-14T15:28:46.5479604Z node: v22.23.2
+2026-08-14T15:28:46.5479969Z npm: 10.9.8
+2026-08-14T15:28:46.5480245Z yarn: 1.22.22
+2026-08-14T15:28:46.5481494Z ##[endgroup]
+2026-08-14T15:28:46.5904032Z ##[group]Run dtolnay/rust-toolchain@stable
+2026-08-14T15:28:46.5904371Z with:
+2026-08-14T15:28:46.5904559Z   targets: x86_64-pc-windows-msvc
+2026-08-14T15:28:46.5904804Z   toolchain: stable
+2026-08-14T15:28:46.5904979Z env:
+2026-08-14T15:28:46.5905219Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:46.5905526Z ##[endgroup]
+2026-08-14T15:28:46.5976247Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-08-14T15:28:46.6148211Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-08-14T15:28:46.6148824Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-08-14T15:28:46.6149361Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-08-14T15:28:46.6149917Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-08-14T15:28:46.6150200Z [36;1m  exit 1[0m
+2026-08-14T15:28:46.6150559Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-08-14T15:28:46.6150970Z [36;1m  if [[ Windows == macOS ]]; then[0m
+2026-08-14T15:28:46.6151503Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6152002Z [36;1m  else[0m
+2026-08-14T15:28:46.6152383Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6152820Z [36;1m  fi[0m
+2026-08-14T15:28:46.6153099Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-08-14T15:28:46.6153626Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6154069Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-08-14T15:28:46.6154579Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6155057Z [36;1melse[0m
+2026-08-14T15:28:46.6155279Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6155554Z [36;1mfi[0m
+2026-08-14T15:28:46.6176046Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:46.6176435Z env:
+2026-08-14T15:28:46.6176683Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:46.6177090Z   toolchain: stable
+2026-08-14T15:28:46.6177292Z ##[endgroup]
+2026-08-14T15:28:46.6646425Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=66]
+2026-08-14T15:28:46.6653476Z ##[start-action display=Construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-08-14T15:28:46.6794698Z ##[group]Run echo "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT
+2026-08-14T15:28:46.6795569Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6796195Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6796664Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:46.6822012Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:46.6822418Z env:
+2026-08-14T15:28:46.6822668Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:46.6823005Z   targets: x86_64-pc-windows-msvc
+2026-08-14T15:28:46.6823230Z   components: 
+2026-08-14T15:28:46.6823426Z ##[endgroup]
+2026-08-14T15:28:46.7603522Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=94]
+2026-08-14T15:28:46.7605760Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-08-14T15:28:46.7735240Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV
+2026-08-14T15:28:46.7737390Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV[0m
+2026-08-14T15:28:46.7755467Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:46.7755848Z env:
+2026-08-14T15:28:46.7756131Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:46.7756448Z ##[endgroup]
+2026-08-14T15:28:46.8154202Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=54]
+2026-08-14T15:28:46.8156354Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-08-14T15:28:46.8165801Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-08-14T15:28:46.8168350Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-08-14T15:28:46.8290794Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-08-14T15:28:46.8291137Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-08-14T15:28:46.8291890Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://win.rustup.rs/x86_64 --output 'D:\a\_temp\rustup-init.exe'[0m
+2026-08-14T15:28:46.8292756Z [36;1m  'D:\a\_temp\rustup-init.exe' --default-toolchain none --no-modify-path -y[0m
+2026-08-14T15:28:46.8293169Z [36;1m  echo "$CARGO_HOME\bin" >> $GITHUB_PATH[0m
+2026-08-14T15:28:46.8293425Z [36;1mfi[0m
+2026-08-14T15:28:46.8310142Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:46.8310537Z env:
+2026-08-14T15:28:46.8310788Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:46.8311125Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:46.8311368Z ##[endgroup]
+2026-08-14T15:28:46.8793437Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=62]
+2026-08-14T15:28:46.8806123Z ##[start-action display=rustup toolchain install stable;id=__dtolnay_rust-toolchain.__run_4]
+2026-08-14T15:28:46.8948236Z ##[group]Run rustup toolchain install stable --target x86_64-pc-windows-msvc --profile minimal --no-self-update
+2026-08-14T15:28:46.8948994Z [36;1mrustup toolchain install stable --target x86_64-pc-windows-msvc --profile minimal --no-self-update[0m
+2026-08-14T15:28:46.8965649Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:46.8966038Z env:
+2026-08-14T15:28:46.8966291Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:46.8966635Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:46.8966912Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-08-14T15:28:46.8967127Z ##[endgroup]
+2026-08-14T15:28:49.9353671Z info: syncing channel updates for stable-x86_64-pc-windows-msvc
+2026-08-14T15:28:50.4416756Z info: latest update on 2026-07-16 for version 1.97.1 (8bab26f4f 2026-07-14)
+2026-08-14T15:28:50.4845402Z info: component rust-std is up to date
+2026-08-14T15:28:50.4865470Z 
+2026-08-14T15:28:50.5074667Z   stable-x86_64-pc-windows-msvc unchanged - rustc 1.97.1 (8bab26f4f 2026-07-14)
+2026-08-14T15:28:50.5075630Z 
+2026-08-14T15:28:50.5197088Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=3639]
+2026-08-14T15:28:50.5203149Z ##[start-action display=rustup default stable;id=__dtolnay_rust-toolchain.__run_5]
+2026-08-14T15:28:50.5330059Z ##[group]Run rustup default stable
+2026-08-14T15:28:50.5330324Z [36;1mrustup default stable[0m
+2026-08-14T15:28:50.5346368Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:50.5346773Z env:
+2026-08-14T15:28:50.5347018Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:50.5347367Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:50.5347618Z ##[endgroup]
+2026-08-14T15:28:50.6069866Z info: using existing install for stable-x86_64-pc-windows-msvc
+2026-08-14T15:28:50.6122577Z info: default toolchain set to stable-x86_64-pc-windows-msvc
+2026-08-14T15:28:50.6122932Z 
+2026-08-14T15:28:50.6327583Z   stable-x86_64-pc-windows-msvc unchanged - rustc 1.97.1 (8bab26f4f 2026-07-14)
+2026-08-14T15:28:50.6328127Z 
+2026-08-14T15:28:50.6403158Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=119]
+2026-08-14T15:28:50.6405503Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-08-14T15:28:50.6529883Z ##[group]Run DATE=$(rustc +stable --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-08-14T15:28:50.6531400Z [36;1mDATE=$(rustc +stable --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-08-14T15:28:50.6532027Z [36;1mHASH=$(rustc +stable --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-08-14T15:28:50.6532497Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-08-14T15:28:50.6548996Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:50.6549378Z env:
+2026-08-14T15:28:50.6549634Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:50.6549973Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:50.6550217Z ##[endgroup]
+2026-08-14T15:28:51.4480701Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=807]
+2026-08-14T15:28:51.4483785Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-08-14T15:28:51.4609972Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-08-14T15:28:51.4610331Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-08-14T15:28:51.4610636Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-08-14T15:28:51.4610896Z [36;1mfi[0m
+2026-08-14T15:28:51.4627167Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:51.4627556Z env:
+2026-08-14T15:28:51.4627819Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:51.4628155Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:51.4628400Z ##[endgroup]
+2026-08-14T15:28:51.5291846Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=80]
+2026-08-14T15:28:51.5294169Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-08-14T15:28:51.5423888Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-08-14T15:28:51.5424237Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-08-14T15:28:51.5424558Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-08-14T15:28:51.5424827Z [36;1mfi[0m
+2026-08-14T15:28:51.5442405Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:51.5442799Z env:
+2026-08-14T15:28:51.5443059Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:51.5443419Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:51.5443673Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:28:51.5443868Z ##[endgroup]
+2026-08-14T15:28:51.5875808Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=58]
+2026-08-14T15:28:51.5878536Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-08-14T15:28:51.6008378Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-08-14T15:28:51.6008872Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-08-14T15:28:51.6009538Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-08-14T15:28:51.6010269Z [36;1m  if rustc +stable --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-08-14T15:28:51.6010771Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-08-14T15:28:51.6012105Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-08-14T15:28:51.6013083Z [36;1m  elif rustc +stable --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-08-14T15:28:51.6013994Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-08-14T15:28:51.6014807Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-08-14T15:28:51.6015399Z [36;1m  fi[0m
+2026-08-14T15:28:51.6015692Z [36;1mfi[0m
+2026-08-14T15:28:51.6043153Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:51.6044066Z env:
+2026-08-14T15:28:51.6044499Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:51.6045091Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:51.6045630Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:28:51.6045984Z   CARGO_TERM_COLOR: always
+2026-08-14T15:28:51.6046347Z ##[endgroup]
+2026-08-14T15:28:51.8119602Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=224]
+2026-08-14T15:28:51.8122348Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-08-14T15:28:51.8259861Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-08-14T15:28:51.8260591Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-08-14T15:28:51.8261181Z [36;1mif rustc +stable --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-08-14T15:28:51.8261637Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-08-14T15:28:51.8261926Z [36;1mfi[0m
+2026-08-14T15:28:51.8280099Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:51.8280488Z env:
+2026-08-14T15:28:51.8280745Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:51.8281105Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:51.8281356Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:28:51.8281555Z   CARGO_TERM_COLOR: always
+2026-08-14T15:28:51.8281765Z ##[endgroup]
+2026-08-14T15:28:51.9471237Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=134]
+2026-08-14T15:28:51.9476489Z ##[start-action display=rustc +stable --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-08-14T15:28:51.9618746Z ##[group]Run rustc +stable --version --verbose
+2026-08-14T15:28:51.9619072Z [36;1mrustc +stable --version --verbose[0m
+2026-08-14T15:28:51.9635228Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-14T15:28:51.9635610Z env:
+2026-08-14T15:28:51.9635863Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:51.9636200Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:51.9636453Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:28:51.9636657Z   CARGO_TERM_COLOR: always
+2026-08-14T15:28:51.9636869Z ##[endgroup]
+2026-08-14T15:28:52.0499780Z rustc 1.97.1 (8bab26f4f 2026-07-14)
+2026-08-14T15:28:52.0500299Z binary: rustc
+2026-08-14T15:28:52.0500816Z commit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452
+2026-08-14T15:28:52.0501359Z commit-date: 2026-07-14
+2026-08-14T15:28:52.0501768Z host: x86_64-pc-windows-msvc
+2026-08-14T15:28:52.0502147Z release: 1.97.1
+2026-08-14T15:28:52.0503001Z LLVM version: 22.1.6
+2026-08-14T15:28:52.0651389Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=117]
+2026-08-14T15:28:52.0860046Z ##[group]Run Swatinem/rust-cache@v2
+2026-08-14T15:28:52.0860362Z with:
+2026-08-14T15:28:52.0860544Z   workspaces: src-tauri
+2026-08-14T15:28:52.0860762Z   prefix-key: v0-rust
+2026-08-14T15:28:52.0860965Z   add-job-id-key: true
+2026-08-14T15:28:52.0861178Z   add-rust-environment-hash-key: true
+2026-08-14T15:28:52.0861425Z   cache-targets: true
+2026-08-14T15:28:52.0861616Z   cache-all-crates: false
+2026-08-14T15:28:52.0861829Z   cache-workspace-crates: false
+2026-08-14T15:28:52.0862054Z   save-if: true
+2026-08-14T15:28:52.0862237Z   cache-provider: github
+2026-08-14T15:28:52.0862434Z   cache-bin: true
+2026-08-14T15:28:52.0862614Z   lookup-only: false
+2026-08-14T15:28:52.0862798Z   cmd-format: {0}
+2026-08-14T15:28:52.0862967Z env:
+2026-08-14T15:28:52.0863207Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:52.0863534Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:52.0863778Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:28:52.0864210Z   CARGO_TERM_COLOR: always
+2026-08-14T15:28:52.0864413Z ##[endgroup]
+2026-08-14T15:28:59.0552406Z ##[group]Cache Configuration
+2026-08-14T15:28:59.0553968Z Cache Provider:
+2026-08-14T15:28:59.0554330Z     github
+2026-08-14T15:28:59.0554653Z Workspaces:
+2026-08-14T15:28:59.0555265Z     D:\a\deepseek-harness-desktop\deepseek-harness-desktop\src-tauri
+2026-08-14T15:28:59.0555926Z Cache Paths:
+2026-08-14T15:28:59.0556327Z     C:\Users\runneradmin\.cargo\bin
+2026-08-14T15:28:59.0556865Z     C:\Users\runneradmin\.cargo\.crates.toml
+2026-08-14T15:28:59.0557413Z     C:\Users\runneradmin\.cargo\.crates2.json
+2026-08-14T15:28:59.0557947Z     C:\Users\runneradmin\.cargo\registry
+2026-08-14T15:28:59.0558476Z     C:\Users\runneradmin\.cargo\git
+2026-08-14T15:28:59.0559213Z     D:\a\deepseek-harness-desktop\deepseek-harness-desktop\src-tauri\target
+2026-08-14T15:28:59.0559910Z Restore Key:
+2026-08-14T15:28:59.0560364Z     v0-rust-build-windows-Windows_NT-x64-af4551b0
+2026-08-14T15:28:59.0561614Z Cache Key:
+2026-08-14T15:28:59.0562132Z     v0-rust-build-windows-Windows_NT-x64-af4551b0-f9ce5af9
+2026-08-14T15:28:59.0563021Z .. Prefix:
+2026-08-14T15:28:59.0563573Z   - v0-rust-build-windows-Windows_NT-x64
+2026-08-14T15:28:59.0564148Z .. Environment considered:
+2026-08-14T15:28:59.0564564Z   - Rust Versions:
+2026-08-14T15:28:59.0565165Z     - 1.97.1 x86_64-pc-windows-msvc 8bab26f4f68e0e26f0bb7960be334d5b520ea452
+2026-08-14T15:28:59.0565820Z   - CARGO_HOME
+2026-08-14T15:28:59.0566159Z   - CARGO_INCREMENTAL
+2026-08-14T15:28:59.0566537Z   - CARGO_TERM_COLOR
+2026-08-14T15:28:59.0566934Z .. Lockfiles considered:
+2026-08-14T15:28:59.0567635Z   - D:\a\deepseek-harness-desktop\deepseek-harness-desktop\src-tauri\Cargo.toml
+2026-08-14T15:28:59.0568553Z ##[endgroup]
+2026-08-14T15:28:59.0568739Z 
+2026-08-14T15:28:59.0568901Z ... Restoring cache ...
+2026-08-14T15:28:59.4470346Z No cache found.
+2026-08-14T15:28:59.4760949Z ##[group]Run $lock = Get-Content UPSTREAM.lock.json -Raw | ConvertFrom-Json
+2026-08-14T15:28:59.4761576Z [36;1m$lock = Get-Content UPSTREAM.lock.json -Raw | ConvertFrom-Json[0m
+2026-08-14T15:28:59.4761951Z [36;1m$sha  = $lock.harness.sha[0m
+2026-08-14T15:28:59.4762199Z [36;1m$repo = $lock.harness.repo[0m
+2026-08-14T15:28:59.4762618Z [36;1mif ($sha -like '*<*') { Write-Error "UPSTREAM.lock.json 的 sha 仍为占位符，请先填入真实提交号"; exit 1 }[0m
+2026-08-14T15:28:59.4763063Z [36;1mWrite-Host "Cloning $repo @ $sha"[0m
+2026-08-14T15:28:59.4763477Z [36;1mgit clone --no-checkout "https://github.com/$repo.git" deepseek-harness[0m
+2026-08-14T15:28:59.4763901Z [36;1mgit -C deepseek-harness checkout $sha[0m
+2026-08-14T15:28:59.5353956Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-08-14T15:28:59.5354321Z env:
+2026-08-14T15:28:59.5354589Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:28:59.5354984Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:28:59.5355255Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:28:59.5355464Z   CARGO_TERM_COLOR: always
+2026-08-14T15:28:59.5355697Z   CACHE_ON_FAILURE: false
+2026-08-14T15:28:59.5355913Z ##[endgroup]
+2026-08-14T15:28:59.9714389Z Cloning deepseek-ai/deepseek-harness @ 47f943859bef60e4160492346772ded9b24f765a
+2026-08-14T15:29:00.0020767Z Cloning into 'deepseek-harness'...
+2026-08-14T15:29:10.6590437Z Note: switching to '47f943859bef60e4160492346772ded9b24f765a'.
+2026-08-14T15:29:10.6591197Z 
+2026-08-14T15:29:10.6591650Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-08-14T15:29:10.6592568Z changes and commit them, and you can discard any commits you make in this
+2026-08-14T15:29:10.6593452Z state without impacting any branches by switching back to a branch.
+2026-08-14T15:29:10.6593918Z 
+2026-08-14T15:29:10.6594320Z If you want to create a new branch to retain commits you create, you may
+2026-08-14T15:29:10.6595168Z do so (now or later) by using -c with the switch command. Example:
+2026-08-14T15:29:10.6595596Z 
+2026-08-14T15:29:10.6595808Z   git switch -c <new-branch-name>
+2026-08-14T15:29:10.6596374Z 
+2026-08-14T15:29:10.6596555Z Or undo this operation with:
+2026-08-14T15:29:10.6596800Z 
+2026-08-14T15:29:10.6596929Z   git switch -
+2026-08-14T15:29:10.6597103Z 
+2026-08-14T15:29:10.6597569Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-08-14T15:29:10.6598089Z 
+2026-08-14T15:29:10.6598613Z HEAD is now at 47f943859b Merge pull request #2519 from deepseek-harness/feat/npm-public
+2026-08-14T15:29:10.9523026Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:29:10.9524446Z ##[group]Run actions/cache@v4
+2026-08-14T15:29:10.9524677Z with:
+2026-08-14T15:29:10.9525123Z   path: deepseek-harness/apps/cli/lib
+deepseek-harness/apps/web/dist
+deepseek-harness/packages/**/lib
+
+2026-08-14T15:29:10.9526041Z   key: harness-06cd32189795a43b4e057fb5937d7a748844af54bf9cb356a553882fa8ffb339-42daf827ea7292d72f95ab224260dd82d40147705e1f8cfcad72f71a9d10bc2e
+2026-08-14T15:29:10.9526723Z   restore-keys: harness-
+
+2026-08-14T15:29:10.9526948Z   enableCrossOsArchive: false
+2026-08-14T15:29:10.9527175Z   fail-on-cache-miss: false
+2026-08-14T15:29:10.9527380Z   lookup-only: false
+2026-08-14T15:29:10.9527595Z   save-always: false
+2026-08-14T15:29:10.9527770Z env:
+2026-08-14T15:29:10.9528006Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:29:10.9528336Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:29:10.9528584Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:29:10.9528779Z   CARGO_TERM_COLOR: always
+2026-08-14T15:29:10.9528980Z   CACHE_ON_FAILURE: false
+2026-08-14T15:29:10.9529173Z ##[endgroup]
+2026-08-14T15:29:11.0890281Z (node:2244) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-08-14T15:29:11.0891114Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-14T15:29:11.5131776Z Cache not found for input keys: harness-06cd32189795a43b4e057fb5937d7a748844af54bf9cb356a553882fa8ffb339-42daf827ea7292d72f95ab224260dd82d40147705e1f8cfcad72f71a9d10bc2e, harness-
+2026-08-14T15:29:11.6427998Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:29:11.6429382Z ##[group]Run actions/cache@v4
+2026-08-14T15:29:11.6429608Z with:
+2026-08-14T15:29:11.6429787Z   path: ~/.pnpm-store
+2026-08-14T15:29:11.6430395Z   key: pnpm-06cd32189795a43b4e057fb5937d7a748844af54bf9cb356a553882fa8ffb339
+2026-08-14T15:29:11.6430798Z   restore-keys: pnpm-
+
+2026-08-14T15:29:11.6431016Z   enableCrossOsArchive: false
+2026-08-14T15:29:11.6431271Z   fail-on-cache-miss: false
+2026-08-14T15:29:11.6431676Z   lookup-only: false
+2026-08-14T15:29:11.6431866Z   save-always: false
+2026-08-14T15:29:11.6432041Z env:
+2026-08-14T15:29:11.6432282Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:29:11.6432653Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:29:11.6432910Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:29:11.6433110Z   CARGO_TERM_COLOR: always
+2026-08-14T15:29:11.6433315Z   CACHE_ON_FAILURE: false
+2026-08-14T15:29:11.6433518Z ##[endgroup]
+2026-08-14T15:29:11.7785960Z (node:8888) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-08-14T15:29:11.7787285Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-14T15:29:12.1204578Z Cache not found for input keys: pnpm-06cd32189795a43b4e057fb5937d7a748844af54bf9cb356a553882fa8ffb339, pnpm-
+2026-08-14T15:29:12.2512693Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:29:12.2515086Z ##[group]Run actions/cache@v4
+2026-08-14T15:29:12.2515318Z with:
+2026-08-14T15:29:12.2515616Z   path: dist/dsh.exe
+src-tauri/externalBin/dsh-x86_64-pc-windows-msvc.exe
+
+2026-08-14T15:29:12.2516115Z   key: dsh-7833cdb2bf9968aefdf7caef3e426553dcb6c6e6c88fa262ca7eb20c0cf7eade
+2026-08-14T15:29:12.2516499Z   restore-keys: dsh-
+
+2026-08-14T15:29:12.2516714Z   enableCrossOsArchive: false
+2026-08-14T15:29:12.2516942Z   fail-on-cache-miss: false
+2026-08-14T15:29:12.2517158Z   lookup-only: false
+2026-08-14T15:29:12.2517347Z   save-always: false
+2026-08-14T15:29:12.2517526Z env:
+2026-08-14T15:29:12.2517804Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:29:12.2518140Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:29:12.2518394Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:29:12.2518595Z   CARGO_TERM_COLOR: always
+2026-08-14T15:29:12.2518811Z   CACHE_ON_FAILURE: false
+2026-08-14T15:29:12.2519012Z ##[endgroup]
+2026-08-14T15:29:12.3850039Z (node:5456) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-08-14T15:29:12.3850820Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-14T15:29:12.7304961Z Cache not found for input keys: dsh-7833cdb2bf9968aefdf7caef3e426553dcb6c6e6c88fa262ca7eb20c0cf7eade, dsh-
+2026-08-14T15:29:12.7552044Z ##[group]Run pwsh desktop/scripts/build-harness.ps1 -HarnessDir ./deepseek-harness
+2026-08-14T15:29:12.7552683Z [36;1mpwsh desktop/scripts/build-harness.ps1 -HarnessDir ./deepseek-harness[0m
+2026-08-14T15:29:12.7622883Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-08-14T15:29:12.7623221Z env:
+2026-08-14T15:29:12.7623484Z   PNPM_HOME: C:\Users\runneradmin\setup-pnpm\node_modules\.bin
+2026-08-14T15:29:12.7623814Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-08-14T15:29:12.7624066Z   CARGO_INCREMENTAL: 0
+2026-08-14T15:29:12.7624407Z   CARGO_TERM_COLOR: always
+2026-08-14T15:29:12.7624799Z   CACHE_ON_FAILURE: false
+2026-08-14T15:29:12.7625114Z ##[endgroup]
+2026-08-14T15:29:13.4685642Z Windows build: temporarily moved native/landlock-run to C:\Users\RUNNER~1\AppData\Local\Temp\landlock-run.stash.0796dbd64941467f95885a5b84e72401
+2026-08-14T15:29:13.4691471Z ==> pnpm install (in D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness)
+2026-08-14T15:29:15.1332286Z Scope: all 234 workspace projects
+2026-08-14T15:29:15.3075823Z [WARN] There are cyclic workspace dependencies: D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\api\gateway, D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\client\connection, D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\host\apiproxy, D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\api\remotes; D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\sandbox\sandbox-local, D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\sandbox\sandbox-windows-acl; D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\subagent\subagent-spawn-in-process, D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\subagent\tool-subagent; D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\vendor\cordis, D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\vendor\include
+2026-08-14T15:29:15.5799744Z ? Verifying lockfile against supply-chain policies (1203 entries)...
+2026-08-14T15:29:15.8187478Z Lockfile is up to date, resolution step is skipped
+2026-08-14T15:29:16.1541780Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-14T15:29:16.3382646Z Packages: +923
+2026-08-14T15:29:16.3383276Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2026-08-14T15:29:17.1575262Z Progress: resolved 923, reused 0, downloaded 50, added 0
+2026-08-14T15:29:18.1602283Z Progress: resolved 923, reused 0, downloaded 132, added 3
+2026-08-14T15:29:19.1609844Z Progress: resolved 923, reused 0, downloaded 169, added 4
+2026-08-14T15:29:20.1725581Z Progress: resolved 923, reused 0, downloaded 225, added 8
+2026-08-14T15:29:21.1780156Z Progress: resolved 923, reused 0, downloaded 268, added 12
+2026-08-14T15:29:22.1840192Z Progress: resolved 923, reused 0, downloaded 352, added 16
+2026-08-14T15:29:23.2084538Z Progress: resolved 923, reused 0, downloaded 413, added 20
+2026-08-14T15:29:24.2132154Z Progress: resolved 923, reused 0, downloaded 474, added 24
+2026-08-14T15:29:24.5715517Z ✓ Lockfile passes supply-chain policies (1203 entries in 8.9s)
+2026-08-14T15:29:25.2163938Z Progress: resolved 923, reused 0, downloaded 535, added 28
+2026-08-14T15:29:26.2155354Z Progress: resolved 923, reused 0, downloaded 642, added 36
+2026-08-14T15:29:27.2306889Z Progress: resolved 923, reused 0, downloaded 750, added 44
+2026-08-14T15:29:28.2535487Z Progress: resolved 923, reused 0, downloaded 758, added 44
+2026-08-14T15:29:29.2535589Z Progress: resolved 923, reused 0, downloaded 814, added 48
+2026-08-14T15:29:30.2683668Z Progress: resolved 923, reused 0, downloaded 821, added 48
+2026-08-14T15:29:31.2973301Z Progress: resolved 923, reused 0, downloaded 848, added 52
+2026-08-14T15:29:32.2983294Z Progress: resolved 923, reused 0, downloaded 916, added 86
+2026-08-14T15:29:33.3112240Z Progress: resolved 923, reused 0, downloaded 916, added 258
+2026-08-14T15:29:34.3120718Z Progress: resolved 923, reused 0, downloaded 917, added 491
+2026-08-14T15:29:35.3127038Z Progress: resolved 923, reused 0, downloaded 917, added 595
+2026-08-14T15:29:36.3142989Z Progress: resolved 923, reused 0, downloaded 917, added 779
+2026-08-14T15:29:37.3156407Z Progress: resolved 923, reused 0, downloaded 917, added 852
+2026-08-14T15:29:38.0222475Z Progress: resolved 923, reused 0, downloaded 917, added 923, done
+2026-08-14T15:29:40.6524838Z .../.pnpm/koffi@3.1.1/node_modules/koffi install$ node ./cnoke.cjs -P . -D src/koffi --prebuild --release
+2026-08-14T15:29:40.6539319Z .../node_modules/node-pty install$ node scripts/prebuild.js || node-gyp rebuild
+2026-08-14T15:29:40.6719469Z .../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
+2026-08-14T15:29:40.6739759Z .../esbuild@0.28.1/node_modules/esbuild postinstall$ node install.js
+2026-08-14T15:29:40.6905587Z .../lefthook@2.1.9/node_modules/lefthook postinstall$ node postinstall.js
+2026-08-14T15:29:40.7505254Z .../node_modules/node-pty install: [32m> Checking prebuilds...[0m
+2026-08-14T15:29:40.8150085Z .../node_modules/node-pty install: Done
+2026-08-14T15:29:40.8157036Z .../node_modules/node-pty postinstall$ node scripts/post-install.js
+2026-08-14T15:29:40.8242642Z .../lefthook@2.1.9/node_modules/lefthook postinstall: Done
+2026-08-14T15:29:40.8537905Z .../esbuild@0.21.5/node_modules/esbuild postinstall$ node install.js
+2026-08-14T15:29:40.9070599Z .../.pnpm/koffi@3.1.1/node_modules/koffi install: Done
+2026-08-14T15:29:40.9120777Z .../node_modules/node-pty postinstall: [32m> Cleaning release folder...[0m
+2026-08-14T15:29:40.9168065Z .../node_modules/node-pty postinstall: [32m> Moving conpty.dll...[0m
+2026-08-14T15:29:40.9191782Z .../node_modules/node-pty postinstall:   Using os.arch(): x64
+2026-08-14T15:29:40.9203242Z .../node_modules/node-pty postinstall:   Found version 1.23.251008001
+2026-08-14T15:29:40.9214949Z .../node_modules/node-pty postinstall:   Copying D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\node_modules\.pnpm\node-pty@1.1.0_patch_hash=7_101a28b17db9b9156cf314f57eaa9c18\node_modules\node-pty\third_party\conpty\1.23.251008001\win10-x64\conpty.dll -> D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\node_modules\.pnpm\node-pty@1.1.0_patch_hash=7_101a28b17db9b9156cf314f57eaa9c18\node_modules\node-pty\build\Release\conpty\conpty.dll
+2026-08-14T15:29:40.9253594Z .../node_modules/node-pty postinstall:   Copying D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\node_modules\.pnpm\node-pty@1.1.0_patch_hash=7_101a28b17db9b9156cf314f57eaa9c18\node_modules\node-pty\third_party\conpty\1.23.251008001\win10-x64\OpenConsole.exe -> D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\node_modules\.pnpm\node-pty@1.1.0_patch_hash=7_101a28b17db9b9156cf314f57eaa9c18\node_modules\node-pty\build\Release\conpty\OpenConsole.exe
+2026-08-14T15:29:40.9304052Z .../esbuild@0.25.12/node_modules/esbuild postinstall: Done
+2026-08-14T15:29:40.9376401Z .../node_modules/node-pty postinstall: Done
+2026-08-14T15:29:40.9633241Z .../esbuild@0.28.1/node_modules/esbuild postinstall: Done
+2026-08-14T15:29:41.0506341Z .../esbuild@0.21.5/node_modules/esbuild postinstall: Done
+2026-08-14T15:29:41.3294484Z [WARN] Failed to create bin at D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\examples\node_modules\.bin\dsh-acp-demo. ENOENT: no such file or directory, stat 'D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\examples\acp-demo\lib\bin.js.EXE'
+2026-08-14T15:29:42.1887528Z [WARN] Failed to create bin at D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\python\sdk-runtime\node_modules\.bin\dsh-jsonrpc-agent. ENOENT: no such file or directory, stat 'D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\packages\examples\jsonrpc-demo\lib\bin.js.EXE'
+2026-08-14T15:29:42.3981132Z 
+2026-08-14T15:29:42.3981637Z devDependencies:
+2026-08-14T15:29:42.3982160Z + @agentclientprotocol/sdk 0.25.1
+2026-08-14T15:29:42.3983325Z + @deepseek-ai/dsh-tool-session-query 0.1.0-rc.5 <- packages\session-query\tool-session-query
+2026-08-14T15:29:42.3984067Z + @stylistic/eslint-plugin 5.10.0
+2026-08-14T15:29:42.3984375Z + @testing-library/dom 10.4.1
+2026-08-14T15:29:42.3984659Z + @testing-library/react 16.3.2
+2026-08-14T15:29:42.3985104Z + @types/js-yaml 4.0.9
+2026-08-14T15:29:42.3985338Z + @types/jsdom 28.0.3
+2026-08-14T15:29:42.3985551Z + @types/mdast 4.0.4
+2026-08-14T15:29:42.3985750Z + @types/node 22.20.0
+2026-08-14T15:29:42.3986009Z + @types/spdx-expression-parse 4.0.0
+2026-08-14T15:29:42.3986294Z + @vitest/coverage-v8 4.1.8
+2026-08-14T15:29:42.3986540Z + @yarnpkg/cli-dist 4.17.1
+2026-08-14T15:29:42.3986793Z + eslint-plugin-sonarjs 4.1.0
+2026-08-14T15:29:42.3987028Z + execa 10.0.0
+2026-08-14T15:29:42.3987230Z + fast-check 4.8.0
+2026-08-14T15:29:42.3987461Z + istanbul-lib-report 3.0.1
+2026-08-14T15:29:42.3987687Z + js-yaml 4.2.0
+2026-08-14T15:29:42.3987870Z + jscpd 5.0.12
+2026-08-14T15:29:42.3988055Z + jsdom 29.1.1
+2026-08-14T15:29:42.3988234Z + knip 6.16.1
+2026-08-14T15:29:42.3988418Z + lefthook 2.1.9
+2026-08-14T15:29:42.3988622Z + lightningcss 1.32.0
+2026-08-14T15:29:42.3988872Z + mdast-util-from-markdown 2.0.3
+2026-08-14T15:29:42.3989132Z + mdast-util-gfm 3.1.0
+2026-08-14T15:29:42.3989338Z + mermaid 11.16.0
+2026-08-14T15:29:42.3989569Z + micromark-extension-gfm 3.0.0
+2026-08-14T15:29:42.3989799Z + oxlint 1.76.0
+2026-08-14T15:29:42.3990002Z + oxlint-tsgolint 7.0.2001
+2026-08-14T15:29:42.3990217Z + publint 0.3.21
+2026-08-14T15:29:42.3990430Z + smol-toml 1.7.1
+2026-08-14T15:29:42.3990649Z + spdx-expression-parse 5.0.0
+2026-08-14T15:29:42.3990887Z + tsdown 0.22.2
+2026-08-14T15:29:42.3991063Z + tsx 4.22.4
+2026-08-14T15:29:42.3991245Z + typescript 6.0.3
+2026-08-14T15:29:42.3991459Z + vite-tsconfig-paths 6.1.1
+2026-08-14T15:29:42.3991680Z + vitest 4.1.8
+2026-08-14T15:29:42.3991785Z 
+2026-08-14T15:29:42.7971857Z packages/subprocess/subprocess-local postinstall$ node scripts/ensure-spawn-helper.mjs
+2026-08-14T15:29:42.8783668Z packages/subprocess/subprocess-local postinstall: Done
+2026-08-14T15:29:43.1818380Z . postinstall$ node scripts/install-lefthook.mjs
+2026-08-14T15:29:43.2742274Z . postinstall: Done
+2026-08-14T15:29:43.3797671Z [WARN] Failed to create bin at D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\examples\node_modules\.bin\dsh-acp-demo. ENOENT: no such file or directory, stat 'D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\examples\node_modules\@deepseek-ai\dsh-acp-demo\lib\bin.js.EXE'
+2026-08-14T15:29:43.4037934Z [WARN] Failed to create bin at D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\python\sdk-runtime\node_modules\.bin\dsh-jsonrpc-agent. ENOENT: no such file or directory, stat 'D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\python\sdk-runtime\node_modules\@deepseek-ai\dsh-sdk-jsonrpc-demo\lib\bin.js.EXE'
+2026-08-14T15:29:43.7284660Z Done in 30.1s using pnpm v11.7.0
+2026-08-14T15:29:43.8261301Z ==> pnpm run build
+2026-08-14T15:29:44.6735553Z $ npm run build:lib && npm run build:web
+2026-08-14T15:29:45.3081820Z 
+2026-08-14T15:29:45.3082482Z > @deepseek-ai/dsh-root@0.1.0-rc.5 build:lib
+2026-08-14T15:29:45.3083695Z > npm run build:lib:host && npm run build:lib:client
+2026-08-14T15:29:45.3085107Z 
+2026-08-14T15:29:45.6697978Z 
+2026-08-14T15:29:45.6698663Z > @deepseek-ai/dsh-root@0.1.0-rc.5 build:lib:host
+2026-08-14T15:29:45.6699392Z > tsc -b tsconfig.host.json && tsdown --env.DSH_BUILD_FACE host
+2026-08-14T15:29:45.6699667Z 
+2026-08-14T15:30:07.1951768Z error TS5083: Cannot read file 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry/tsconfig.json'.
+2026-08-14T15:30:07.6622985Z ##[error]packages/examples/agent-spine-demo/tsconfig.json(20,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:11.1953970Z ##[error]packages/sandbox/sandbox-local/tsconfig.json(20,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:11.2799263Z ##[error]packages/shell/bash-sandbox/tsconfig.json(17,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:13.6197836Z ##[error]packages/examples/agent-spine-demo/tsconfig.json(20,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:23.8015658Z ##[error]packages/examples/agent-spine-demo/tsconfig.json(20,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:23.8019437Z ##[error]packages/sandbox/sandbox-local/tsconfig.json(20,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:23.8021965Z ##[error]packages/shell/bash-sandbox/tsconfig.json(17,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:23.8024313Z ##[error]tsconfig.host.json(209,5): error TS6053: File 'D:/a/deepseek-harness-desktop/deepseek-harness-desktop/deepseek-harness/native/landlock-run/packages/entry' not found.
+2026-08-14T15:30:24.9864849Z [ELIFECYCLE] Command failed with exit code 2.
+2026-08-14T15:30:25.7022629Z Restored native/landlock-run to: D:\a\deepseek-harness-desktop\deepseek-harness-desktop\deepseek-harness\native\landlock-run
+2026-08-14T15:30:26.3508744Z [31;1mWrite-Error: [0mD:\a\deepseek-harness-desktop\deepseek-harness-desktop\desktop\scripts\build-harness.ps1:74[0m
+2026-08-14T15:30:26.3509805Z [31;1m[0m[36;1mLine |[0m
+2026-08-14T15:30:26.3510360Z [31;1m[0m[36;1m[36;1m  74 | [0m     [36;1mWrite-Error "build-harness failed: $_"[0m
+2026-08-14T15:30:26.3511068Z [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+2026-08-14T15:30:26.3512219Z [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mbuild-harness failed: pnpm run build failed (exit 2)[0m
+2026-08-14T15:30:26.4568554Z ##[error]Process completed with exit code 1.
+2026-08-14T15:30:26.4825156Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:30:26.4826470Z Post job cleanup.
+2026-08-14T15:30:26.6734274Z Pruning is unnecessary.
+2026-08-14T15:30:26.7036115Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-14T15:30:26.7037454Z Post job cleanup.
+2026-08-14T15:30:26.9056554Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-08-14T15:30:26.9329213Z git version 2.55.0.windows.3
+2026-08-14T15:30:26.9389706Z Temporarily overriding HOME='D:\a\_temp\4d538f3a-c5a6-48d9-bfc7-00b209304f1a' before making global git config changes
+2026-08-14T15:30:26.9391054Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-14T15:30:26.9400519Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\deepseek-harness-desktop\deepseek-harness-desktop
+2026-08-14T15:30:26.9707973Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-08-14T15:30:27.0086013Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-08-14T15:30:27.5388823Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-14T15:30:27.5660565Z http.https://github.com/.extraheader
+2026-08-14T15:30:27.5705251Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-08-14T15:30:27.6027208Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-08-14T15:30:28.1670310Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-14T15:30:28.1975894Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-08-14T15:30:28.7272529Z Cleaning up orphan processes
+2026-08-14T15:30:28.7472118Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/checkout@v4, actions/setup-node@v4, pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

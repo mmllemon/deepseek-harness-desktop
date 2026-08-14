@@ -3,19 +3,19 @@
   Hard acceptance Gate from doc section 12.6 (real Windows environment, item by item).
 .DESCRIPTION
   Exit 0 only if all pass; required items (a)(b)(c)(e) failure => exit 1.
-  (a) dsh.exe exists and is a single file;
-  (b) start dsh web --port <free port>, capture ready line http://127.0.0.1:<port> within timeout;
+  (a) harness entry (dsh-dist/lib/bin.js) exists;
+  (b) start `node <entry> web --port <free port>`, capture ready line http://127.0.0.1:<port> within timeout;
   (c) curl http://127.0.0.1:<port> returns HTML;
   (d) if DEEPSEEK_API_KEY set, probe API (informational, not counted as failure);
   (e) clean exit (terminate process);
   (f) print PASS/FAIL summary.
-.PARAMETER DshPath
-  Path to dsh.exe under test (default ./dist/dsh.exe).
+.PARAMETER EntryPath
+  Path to the deployed harness entry (default ./dsh-dist/lib/bin.js) run via `node`.
 .PARAMETER TimeoutSec
   Max seconds to wait for ready line (default 60).
 #>
 param(
-    [string]$DshPath = "./dist/dsh.exe",
+    [string]$EntryPath = "./dsh-dist/lib/bin.js",
     [int]$TimeoutSec = 60
 )
 
@@ -29,18 +29,17 @@ function Record($name, $ok, $detail) {
     $script:results += [PSCustomObject]@{ Name = $name; Ok = $ok; Detail = $detail }
 }
 
-$dsh = Resolve-Path $DshPath -ErrorAction SilentlyContinue
-if (-not $dsh) { Write-Error "dsh not found: $DshPath"; exit 1 }
-$dsh = $dsh.Path
+$entry = Resolve-Path $EntryPath -ErrorAction SilentlyContinue
+if (-not $entry) { Write-Error "harness entry not found: $EntryPath"; exit 1 }
+$entry = $entry.Path
+$nodeExe = (node -e "process.stdout.write(process.execPath)")
 
 $proc = $null
 try {
-    # (a) dsh.exe exists and is a single file
-    $isFile  = Test-Path -Path $dsh -PathType Leaf
-    $size    = if ($isFile) { (Get-Item $dsh).Length } else { 0 }
-    $singleFile = $isFile -and $size -gt 1MB
-    Record "(a) dsh.exe exists and is single file" $singleFile "path=$dsh size=$size"
-    if (-not $singleFile) { throw "Gate (a) failed" }
+    # (a) harness entry exists
+    $exists = Test-Path -Path $entry -PathType Leaf
+    Record "(a) harness entry exists" $exists "path=$entry"
+    if (-not $exists) { throw "Gate (a) failed" }
 
     # pick a free port
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -51,8 +50,8 @@ try {
     # (b) start and capture ready line
     $outFile = Join-Path $env:TEMP ("dsh-smoke-" + [guid]::NewGuid().ToString("N") + ".out.log")
     $errFile = Join-Path $env:TEMP ("dsh-smoke-" + [guid]::NewGuid().ToString("N") + ".err.log")
-    Write-Host "==> start dsh web --port $port (stdout -> $outFile)"
-    $proc = Start-Process -FilePath $dsh -ArgumentList "web", "--port", $port `
+    Write-Host "==> start node $entry web --port $port (stdout -> $outFile)"
+    $proc = Start-Process -FilePath $nodeExe -ArgumentList $entry, "web", "--port", $port `
         -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru -NoNewWindow
 
     $ready    = $false
@@ -60,7 +59,7 @@ try {
     while ((Get-Date) -lt $deadline) {
         if ($proc.HasExited) {
             $err = if (Test-Path $errFile) { Get-Content $errFile -Raw -ErrorAction SilentlyContinue } else { "" }
-            throw "dsh exited before ready. stderr: $err"
+            throw "harness exited before ready. stderr: $err"
         }
         if (Test-Path $outFile) {
             $log = Get-Content $outFile -Raw -ErrorAction SilentlyContinue

@@ -1,4 +1,4 @@
-name: Build Windows (Tauri 2 + Node22 SEA)
+name: Build Windows (Tauri 2 + Node22 sidecar Tier 2)
 
 on:
   push:
@@ -69,29 +69,22 @@ jobs:
           restore-keys: |
             pnpm-
 
-      - name: Cache dsh.exe (SEA sidecar)
-        uses: actions/cache@v4
-        with:
-          path: |
-            dist/dsh.exe
-            src-tauri/externalBin/dsh-x86_64-pc-windows-msvc.exe
-          key: dsh-${{ hashFiles('deepseek-harness/apps/cli/lib/**', 'deepseek-harness/apps/web/dist/**', 'scripts/sea-config.json', 'scripts/seapack.cjs') }}
-          restore-keys: |
-            dsh-
-
       - name: Build harness
         shell: pwsh
         run: pwsh desktop/scripts/build-harness.ps1 -HarnessDir ./deepseek-harness
 
-      - name: SEA pack dsh.exe
+      # ---- Tier 2 sidecar: pnpm deploy harness -> dsh-dist (self-contained node_modules) ----
+      - name: Bundle dsh sidecar (Tier 2: node.exe + node_modules)
         shell: pwsh
-        run: node scripts/seapack.cjs
+        run: pwsh desktop/scripts/bundle-dsh.ps1 -HarnessDir ./deepseek-harness -OutDir ./dsh-dist
 
-      - name: Copy sidecar into externalBin
+      # Tauri 期望外部二进制位于 src-tauri/binaries/ 下
+      - name: Stage node.exe sidecar
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path src-tauri/externalBin | Out-Null
-          Copy-Item -Path dist/dsh.exe -Destination src-tauri/externalBin/dsh-x86_64-pc-windows-msvc.exe -Force
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          $node = (node -e "process.stdout.write(process.execPath)")
+          Copy-Item -Path $node -Destination src-tauri/binaries/node-x86_64-pc-windows-msvc.exe -Force
 
       - name: npm ci (frontend deps)
         run: npm ci
@@ -116,7 +109,7 @@ jobs:
 
       - name: Smoke test (section 12.6 acceptance gate)
         shell: pwsh
-        run: pwsh desktop/scripts/smoke.ps1 -DshPath ./dist/dsh.exe
+        run: pwsh desktop/scripts/smoke.ps1 -EntryPath ./dsh-dist/lib/bin.js
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 

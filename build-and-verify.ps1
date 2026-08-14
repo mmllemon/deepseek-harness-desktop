@@ -22,7 +22,7 @@ $pnpm = Get-Command pnpm  -ErrorAction SilentlyContinue
 if(-not $cargo){ Fail "未找到 cargo (Rust)。请先安装 Rust 并勾选 MSVC 工具链: https://rustup.rs"; Read-Host "按回车退出"; exit 1 }
 $nv = (& node -v 2>$null)
 if(-not $node){ Fail "未找到 node。请安装 Node 22 LTS"; Read-Host "按回车退出"; exit 1 }
-if($nv -notmatch "v22"){ Write-Host ("[提示] 检测到 node " + $nv + "，建议 Node 22 LTS（SEA 要求）") }
+if($nv -notmatch "v22"){ Write-Host ("[提示] 检测到 node " + $nv + "，建议 Node 22 LTS") }
 if(-not $pnpm){
     Write-Host "[提示] 未找到 pnpm，尝试用 corepack 启用..."
     & corepack enable 2>$null
@@ -43,32 +43,26 @@ $entry = Join-Path $hDir.Path "apps/cli/lib/bin.js"
 if(-not (Test-Path $entry)){ Fail ("未找到构建产物: " + $entry); Read-Host "按回车退出"; exit 1 }
 Pass "harness 构建完成"
 
-# 3. SEA pack (back up sea-config.json, point main at absolute entry, restore after)
-Banner "3/6 打包单文件 dsh.exe (Node SEA)"
-$cfgPath = Join-Path $root "scripts/sea-config.json"
-$orig = Get-Content $cfgPath -Raw
-try {
-    $cfg = $orig | ConvertFrom-Json
-    $cfg.main = $entry
-    $cfg | ConvertTo-Json -Depth 5 | Set-Content $cfgPath -Encoding utf8
-    & node scripts/seapack.cjs
-    if(-not (Test-Path "dist/dsh.exe")){ throw "SEA 打包未产出 dist/dsh.exe" }
-    Pass "dsh.exe 打包完成"
-} finally {
-    Set-Content $cfgPath -Value $orig -Encoding utf8
-}
+# 3. Tier 2 bundle: pnpm deploy harness -> dsh-dist (self-contained node_modules)
+Banner "3/6 打包 dsh-dist (Tier 2: pnpm deploy)"
+& powershell -NoProfile -ExecutionPolicy Bypass -File "desktop/scripts/bundle-dsh.ps1" -HarnessDir $hDir.Path -OutDir (Join-Path $root "dsh-dist")
+if($LASTEXITCODE -ne 0){ Fail "dsh-dist 打包失败"; Read-Host "按回车退出"; exit 1 }
+$entry = Join-Path $root "dsh-dist/lib/bin.js"
+if(-not (Test-Path $entry)){ Fail ("未找到部署入口: " + $entry); Read-Host "按回车退出"; exit 1 }
+Pass "dsh-dist 打包完成"
 
 # 4. section 12.6 gate (smoke)
 Banner "4/6 运行验收 Gate (smoke.ps1 - section 12.6)"
-& powershell -NoProfile -ExecutionPolicy Bypass -File "desktop/scripts/smoke.ps1" -DshPath "./dist/dsh.exe"
+& powershell -NoProfile -ExecutionPolicy Bypass -File "desktop/scripts/smoke.ps1" -EntryPath $entry
 if($LASTEXITCODE -ne 0){ Fail "验收 Gate 未通过，请查看上方 FAIL 项"; Read-Host "按回车退出"; exit 1 }
 Pass "验收 Gate 通过"
 
-# 5. place sidecar
-Banner "5/6 放置 dsh sidecar 到 src-tauri/externalBin"
-$binDir = Join-Path $root "src-tauri/externalBin"
+# 5. place sidecar (node.exe) into src-tauri/binaries (Tauri 期望此路径)
+Banner "5/6 放置 node sidecar 到 src-tauri/binaries"
+$binDir = Join-Path $root "src-tauri/binaries"
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-Copy-Item -Path "dist/dsh.exe" -Destination (Join-Path $binDir "dsh-x86_64-pc-windows-msvc.exe") -Force
+$nodeExe = (node -e "process.stdout.write(process.execPath)")
+Copy-Item -Path $nodeExe -Destination (Join-Path $binDir "node-x86_64-pc-windows-msvc.exe") -Force
 Pass "sidecar 已放置"
 
 # 6. tauri build

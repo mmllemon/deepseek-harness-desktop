@@ -30,8 +30,11 @@
     "targets": ["nsis"],
     "publisher": "<org>",
     "icon": ["icons/icon.ico"],
-    "externalBin": ["dsh-x86_64-pc-windows-msvc.exe"],
-    "resources": ["../native-mods/*"],
+    "externalBin": ["node-x86_64-pc-windows-msvc.exe"],
+    "resources": {
+      "../native-mods": "native-mods",
+      "../dsh-dist": "dsh-dist"
+    },
     "windows": {
       "webviewInstallMode": { "type": "offlineInstaller" }
     }
@@ -44,7 +47,7 @@
     "shell": {
       "scope": [
         {
-          "name": "dsh",
+          "name": "node",
           "sidecar": true,
           "args": true
         }

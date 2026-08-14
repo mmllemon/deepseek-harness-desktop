@@ -1,0 +1,1 @@
+﻿# Tauri external binaries (sidecar) live here. CI copies node.exe here as node-x86_64-pc-windows-msvc.exe

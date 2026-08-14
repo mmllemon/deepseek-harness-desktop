@@ -1,5 +1,6 @@
 //! sidecar 进程生命周期（§4.1 / §10.7 / §12.5 / §12.7）。
-//! - spawn `dsh web` sidecar（固定参数模板，Rust 端构造，见 §10.3）。
+//! - Tier 2：以 `node` 外部二进制（随安装包分发）运行已部署的 harness 入口
+//!   `dsh-dist/lib/bin.js`（由 pnpm deploy 在打包阶段生成，见 build-windows.yml）。
 //! - 就绪探测：stdout URL 行优先，TCP connect 回退。
 //! - 进程树回收：优先 Tauri 进程管理；Windows 下 Job Object 兜底（§13.8 D8）。
 
@@ -36,11 +37,29 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     let port = pick_port(cfg.server.port);
     let token = gen_token();
 
+    // Tier 2 sidecar：以 `node` 外部二进制运行已部署的 harness 入口
+    // `dsh-dist/lib/bin.js`（pnpm deploy 在打包阶段生成，随安装包分发于资源目录）。
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("获取资源目录失败: {e}"))?;
+    let entry = resource_dir
+        .join("dsh-dist")
+        .join("lib")
+        .join("bin.js");
+    if !entry.exists() {
+        return Err(format!(
+            "找不到 harness 入口: {} (请确认打包阶段已生成 dsh-dist)",
+            entry.display()
+        ));
+    }
+    let entry_str = entry.to_string_lossy().to_string();
+
     let mut child = app
         .shell()
-        .sidecar("dsh")
+        .sidecar("node")
         .map_err(|e| e.to_string())?
-        .args(["web", "--port", &port.to_string()])
+        .args([entry_str, "web".into(), "--port".into(), port.to_string()])
         .envs(env)
         .pipe_stdout(true)
         .pipe_stderr(true)
