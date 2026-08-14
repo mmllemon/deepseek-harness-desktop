@@ -86,8 +86,10 @@ jobs:
           $node = (node -e "process.stdout.write(process.execPath)")
           Copy-Item -Path $node -Destination src-tauri/binaries/node-x86_64-pc-windows-msvc.exe -Force
 
-      - name: npm ci (frontend deps)
-        run: npm ci
+      # Frontend has no committed lockfile (deps use ^ ranges); use `npm install`
+      # instead of `npm ci` which requires an existing package-lock.json.
+      - name: npm install (frontend deps)
+        run: npm install
 
       - name: Build frontend
         run: npm run build
