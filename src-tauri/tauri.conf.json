@@ -30,7 +30,7 @@
     "targets": ["nsis"],
     "publisher": "<org>",
     "icon": ["icons/icon.ico"],
-    "externalBin": ["node-x86_64-pc-windows-msvc.exe"],
+    "externalBin": ["node"],
     "resources": {
       "../native-mods": "native-mods",
       "../dsh-dist": "dsh-dist"
