@@ -4,9 +4,10 @@
 .DESCRIPTION
   Runs `pnpm install` and `pnpm run build` in the harness root (produces apps/cli/lib and apps/web/dist).
 
-  Windows compatibility: if native/landlock-run exists (a Linux-only runtime feature that
-  breaks Windows builds / dirties the tree), move it to $env:TEMP first, then move it back
-  after the build. Never use Remove-Item on a version-controlled directory.
+  NOTE: native/landlock-run is a normal tracked directory in upstream. Its TypeScript
+  sources are referenced unconditionally by tsconfig.host.json (project references), so it
+  MUST remain present on disk for `tsc -b` to resolve. Do NOT move or delete it under any
+  platform -- only its runtime is Linux-only; the source tree is required on Windows too.
 
   After build, guard with `git -C <harness> diff --exit-code` to ensure no tracked files changed.
 .PARAMETER HarnessDir
@@ -25,28 +26,7 @@ if (-not $harness) {
 }
 $harness = $harness.Path
 
-$landlockSrc = Join-Path $harness "native/landlock-run"
-$moved       = $false
-$stashDir    = $null
-
-function Restore-Landlock {
-    if ($script:moved -and $script:stashDir -and (Test-Path $script:stashDir)) {
-        Move-Item -Path $script:stashDir -Destination $landlockSrc -Force
-        Write-Host "Restored native/landlock-run to: $landlockSrc"
-        $script:moved = $false
-    }
-}
-
 try {
-    $runningWindows = ($env:OS -eq 'Windows_NT') -or $IsWindows
-    if ($runningWindows -and (Test-Path $landlockSrc)) {
-        $stashName = "landlock-run.stash." + [System.Guid]::NewGuid().ToString("N")
-        $stashDir  = Join-Path $env:TEMP $stashName
-        Move-Item -Path $landlockSrc -Destination $stashDir -Force
-        Write-Host "Windows build: temporarily moved native/landlock-run to $stashDir"
-        $moved = $true
-    }
-
     Write-Host "==> pnpm install (in $harness)"
     Push-Location $harness
     try {
@@ -72,8 +52,5 @@ try {
     }
 } catch {
     Write-Error "build-harness failed: $_"
-    Restore-Landlock
     exit 1
-} finally {
-    Restore-Landlock
 }
