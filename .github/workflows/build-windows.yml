@@ -147,6 +147,25 @@ jobs:
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
+      - name: Stage installer into workspace (build ran on D:\wb)
+        if: ${{ always() && steps.tauri.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $src = "D:\wb\src-tauri\target\release\bundle"
+          $dst = "$env:GITHUB_WORKSPACE\src-tauri\target\release\bundle"
+          if (-not (Test-Path $src)) {
+            # fallback: also try the host-triple subdir
+            $src = "D:\wb\src-tauri\target\x86_64-pc-windows-msvc\release\bundle"
+          }
+          Write-Host "staging from $src -> $dst"
+          if (Test-Path $src) {
+            robocopy $src $dst /E /NFL /NDL /NJH /NJS
+            if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }
+          } else {
+            throw "no bundle dir found under D:\wb"
+          }
+          Get-ChildItem $dst -Recurse -Include *.exe,*.msi | ForEach-Object { Write-Host "  found: $($_.FullName)" }
+
       - name: Upload installer artifact
         if: ${{ always() && steps.tauri.outcome == 'success' }}
         uses: actions/upload-artifact@v4
