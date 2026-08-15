@@ -153,6 +153,8 @@ jobs:
         with:
           name: deepseek-harness-desktop-windows
           path: |
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
-          if-no-files-found: warn
+          if-no-files-found: error
