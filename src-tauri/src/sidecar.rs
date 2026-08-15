@@ -22,7 +22,8 @@ use crate::state::{AgentStatus, AppState, ChildHandle, LogLine, StateEvent};
 pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     // 防重入
     {
-        let inner = app.state::<AppState>().inner.lock().unwrap();
+        let state = app.state::<AppState>();
+        let inner = state.inner.lock().unwrap();
         if inner.child.is_some() {
             return Ok(current_status(app));
         }
@@ -74,7 +75,8 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     };
 
     {
-        let mut inner = app.state::<AppState>().inner.lock().unwrap();
+        let state = app.state::<AppState>();
+        let mut inner = state.inner.lock().unwrap();
         inner.child = Some(ChildHandle {
             pid,
             child,
@@ -132,6 +134,7 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
                         },
                     );
                 }
+                _ => {}
             }
         }
     });
@@ -245,7 +248,8 @@ pub fn stop_dsh(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
     {
-        let mut inner = app.state::<AppState>().inner.lock().unwrap();
+        let state = app.state::<AppState>();
+        let mut inner = state.inner.lock().unwrap();
         inner.state = "stopped".into();
         inner.token = None;
         inner.proxy_port = None;
