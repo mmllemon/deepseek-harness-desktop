@@ -69,6 +69,33 @@ foreach ($k in $wsPkgs.Keys) {
         Write-Host "   + $k"
     }
 }
+
+# Ensure native modules (node-pty / koffi) are materialized in the deploy.
+# They are transitive PROD dependencies of the CLI (node-pty via
+# @deepseek-ai/dsh-subprocess-local -> used by terminal/bash tools; koffi via
+# @deepseek-ai/dsh-fs-local / dsh-sandbox-windows-acl / dsh-session-persistence-jsonl
+# -> used by FFI features). `pnpm deploy --legacy` only materializes the DIRECT
+# deps of the filtered package, so these third-party transitive natives get
+# dropped from dsh-dist and the sidecar crashes when a terminal tool spawns a
+# pty. Promoting them to DIRECT deps of apps/cli forces pnpm deploy to include
+# them (mirrors the @deepseek-ai/* promotion just above). Versions are read
+# from the harness packages that declare them so pnpm dedupes to the same
+# instance already in the lockfile.
+$nativeSpecs = @(
+    @{ pkg = 'node-pty'; src = (Join-Path $hDir 'packages/subprocess/subprocess-local/package.json') },
+    @{ pkg = 'koffi';    src = (Join-Path $hDir 'packages/fs/fs-local/package.json') }
+)
+foreach ($n in $nativeSpecs) {
+    $ver = $null
+    if (Test-Path $n.src) {
+        try { $sp = Get-Content $n.src -Raw | ConvertFrom-Json; $ver = $sp.dependencies.$($n.pkg) } catch {}
+    }
+    if (-not $ver) { $ver = 'latest' }
+    if (-not $rootPkg.dependencies.PSObject.Properties[$n.pkg]) {
+        $rootPkg.dependencies | Add-Member -NotePropertyName $n.pkg -NotePropertyValue $ver -Force
+        Write-Host "   + $($n.pkg) (native module, forced into deploy) version=$ver"
+    }
+}
 $rootPkg | ConvertTo-Json -Depth 50 | Set-Content -Encoding UTF8 $rootPkgPath
 
 Write-Host "==> pnpm install --no-frozen-lockfile (relink promoted workspace packages)"
@@ -105,6 +132,19 @@ Write-Host "==> pruning non-runtime files from dsh-dist"
 $pat = '*.d.ts *.d.mts *.d.cts *.map *.tsbuildinfo *.flow'
 cmd /c "cd /d `"$outAbs`" && del /s /q $pat" 2>$null
 Write-Host "==> dsh-dist pruned"
+
+# Verify native modules actually landed in the deploy. `pnpm deploy --legacy`
+# has been observed to silently drop third-party transitive natives; if they're
+# missing here, fail fast with a clear message instead of letting the smoke
+# gate discover a MODULE_NOT_FOUND deep in the deployed dsh-dist later.
+foreach ($m in @('node-pty', 'koffi')) {
+    $mp = Join-Path $outAbs "node_modules/$m"
+    if (-not (Test-Path $mp)) {
+        Write-Error "$m missing from dsh-dist after pnpm deploy -- this breaks native-module features (terminal/FFI). Check bundle-dsh native-module promotion."
+        exit 1
+    }
+    Write-Host "   verified native module present: $m"
+}
 
 $entry = Join-Path $outAbs "lib/bin.js"
 if (-not (Test-Path $entry)) { Write-Error "deploy produced no entry: $entry"; exit 1 }
