@@ -9,10 +9,10 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
-use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 
 pub struct ProxyState {
     pub agent_port: u16,

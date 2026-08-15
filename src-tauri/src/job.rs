@@ -23,7 +23,7 @@ pub mod job {
         pub fn new_with_kill_on_close() -> Option<JobHandle> {
             unsafe {
                 let h = CreateJobObjectW(null_mut(), null_mut());
-                if h == INVALID_HANDLE_VALUE || h.is_invalid() {
+                if h == INVALID_HANDLE_VALUE {
                     return None;
                 }
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -46,7 +46,7 @@ pub mod job {
         pub fn assign(&self, pid: u32) -> bool {
             unsafe {
                 let ph = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
-                if ph == INVALID_HANDLE_VALUE || ph.is_invalid() {
+                if ph == INVALID_HANDLE_VALUE {
                     return false;
                 }
                 let r = AssignProcessToJobObject(self.0, ph);

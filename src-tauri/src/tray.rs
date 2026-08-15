@@ -6,11 +6,11 @@ use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 
 pub fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let start = MenuItem::with_id(app, "start", "启动 Agent", true)?;
-    let stop = MenuItem::with_id(app, "stop", "停止 Agent", true)?;
-    let restart = MenuItem::with_id(app, "restart", "重启 Agent", true)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true)?;
+    let start = MenuItem::with_id(app, "start", "启动 Agent", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "停止 Agent", true, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "restart", "重启 Agent", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
     let menu = Menu::with_items(app, &[&start, &stop, &restart, &settings, &quit])?;
 

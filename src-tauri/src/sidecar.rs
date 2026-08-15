@@ -55,23 +55,15 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     }
     let entry_str = entry.to_string_lossy().to_string();
 
-    let mut child = app
+    let (mut rx, mut child) = app
         .shell()
         .sidecar("node")
         .map_err(|e| e.to_string())?
         .args([entry_str, "web".into(), "--port".into(), port.to_string()])
         .envs(env)
-        .pipe_stdout(true)
-        .pipe_stderr(true)
         .spawn()
         .map_err(|e| format!("启动 dsh sidecar 失败: {e}"))?;
     let pid = child.pid();
-
-    // 取出 stdout 接收器（take 后 child 不再持有，避免双重持有）
-    let rx = child
-        .stdout
-        .take()
-        .ok_or_else(|| "无法获取 dsh 标准输出流".to_string())?;
 
     // Windows Job Object 兜底（§4.1）
     let job = {
