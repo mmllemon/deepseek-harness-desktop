@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{OriginalUri, State};
-use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
@@ -28,7 +28,7 @@ pub async fn start_proxy(agent_port: u16, token: String) -> Result<(u16, String)
         .local_addr()
         .map_err(|e| e.to_string())?
         .port();
-    let state = Arc::new(ProxyState { agent_port, token });
+    let state = Arc::new(ProxyState { agent_port, token: token.clone() });
     let app = Router::new().fallback(any(handler)).with_state(state);
 
     tauri::async_runtime::spawn(async move {

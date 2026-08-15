@@ -5,7 +5,6 @@
 //! - 进程树回收：优先 Tauri 进程管理；Windows 下 Job Object 兜底（§13.8 D8）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 use std::time::Duration;
 
 use base64::Engine;
@@ -90,9 +89,9 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
 
     let app2 = app.clone();
     let token2 = token.clone();
-    thread::spawn(move || {
+    tauri::async_runtime::spawn(async move {
         let mut ready = AtomicBool::new(false);
-        while let Ok(ev) = rx.recv() {
+        while let Some(ev) = rx.recv().await {
             match ev {
                 CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
                     let text = String::from_utf8_lossy(&b).to_string();
@@ -116,9 +115,7 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
                             ready.store(true, Ordering::SeqCst);
                             let a = app2.clone();
                             let t = token2.clone();
-                            tauri::async_runtime::spawn(async move {
-                                on_ready(&a, port, &t).await;
-                            });
+                            on_ready(&a, port, &t).await;
                         }
                     }
                 }
@@ -169,15 +166,16 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
 async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str) {
     // 幂等：仅首次生效
     {
-        let inner = app.state::<AppState>().inner.lock().unwrap();
+        let state = app.state::<AppState>();
+        let inner = state.inner.lock().unwrap();
         if inner.state == "running" {
             return;
         }
     }
     match proxy::start_proxy(agent_port, token.to_string()).await {
         Ok((proxy_port, proxy_url)) => {
-            let pid = app
-                .state::<AppState>()
+            let state = app.state::<AppState>();
+            let pid = state
                 .inner
                 .lock()
                 .unwrap()
@@ -185,7 +183,7 @@ async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str) {
                 .as_ref()
                 .map(|c| c.pid);
             {
-                let mut inner = app.state::<AppState>().inner.lock().unwrap();
+                let mut inner = state.inner.lock().unwrap();
                 inner.proxy_port = Some(proxy_port);
                 inner.proxy_url = Some(proxy_url.clone());
                 inner.agent_port = Some(agent_port);
@@ -230,7 +228,8 @@ fn emit_stopped(app: &tauri::AppHandle, agent_port: u16) {
             pid: None,
         },
     );
-    let mut inner = app.state::<AppState>().inner.lock().unwrap();
+    let state = app.state::<AppState>();
+    let mut inner = state.inner.lock().unwrap();
     inner.state = "stopped".into();
     inner.child = None;
 }
@@ -258,7 +257,8 @@ pub fn stop_dsh(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 pub fn current_status(app: &tauri::AppHandle) -> AgentStatus {
-    let inner = app.state::<AppState>().inner.lock().unwrap();
+    let state = app.state::<AppState>();
+    let inner = state.inner.lock().unwrap();
     AgentStatus {
         state: inner.state.clone(),
         agent_port: inner.agent_port.unwrap_or(0),

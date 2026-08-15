@@ -95,7 +95,7 @@ pub struct ChildHandle {
     pub pid: u32,
     pub child: tauri_plugin_shell::process::CommandChild,
     #[cfg(windows)]
-    pub job: Option<crate::job::JobHandle>,
+    pub job: Option<crate::job::job::JobHandle>,
 }
 
 /// 运行期内核状态。
