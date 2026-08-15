@@ -32,7 +32,6 @@
     "icon": ["icons/icon.ico"],
     "externalBin": ["node"],
     "resources": {
-      "../native-mods": "native-mods",
       "../dsh-dist": "dsh-dist"
     },
     "windows": {
