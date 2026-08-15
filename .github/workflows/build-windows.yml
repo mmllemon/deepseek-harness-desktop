@@ -87,16 +87,13 @@ jobs:
           git clone --no-checkout "https://github.com/$repo.git" deepseek-harness
           git -C deepseek-harness checkout $sha
 
-      - name: Cache harness build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            D:\wb\deepseek-harness\apps\cli\lib
-            D:\wb\deepseek-harness\apps\web\dist
-            D:\wb\deepseek-harness\packages\**\lib
-          key: harness-build-${{ hashFiles('UPSTREAM.lock.json') }}
-          restore-keys: |
-            harness-build-
+      # NOTE: We deliberately do NOT cache the harness build outputs
+      # (apps/cli/lib, apps/web/dist, packages/**/lib). The `Build harness`
+      # step always runs `pnpm install && pnpm run build`, so a restored
+      # cache would be overwritten anyway, and saving that very large tree
+      # frequently hangs the runner on upload (observed: step stuck for
+      # hours on "Post Cache harness build artifacts"). The SHA is pinned,
+      # so the only cost is the ~21-min rebuild, which is within budget.
 
       - name: Cache pnpm store
         uses: actions/cache@v4
