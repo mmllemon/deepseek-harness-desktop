@@ -34,6 +34,9 @@
     "resources": {
       "../dsh-dist": "dsh-dist"
     },
+    "publish": [
+      { "provider": "github", "owner": "mmllemon", "repo": "deepseek-harness-desktop" }
+    ],
     "windows": {
       "webviewInstallMode": { "type": "offlineInstaller" }
     }

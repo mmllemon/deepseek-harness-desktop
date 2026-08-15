@@ -32,6 +32,15 @@ jobs:
           if exist D:\wb rmdir /s /q D:\wb
           robocopy "%GITHUB_WORKSPACE%" "D:\wb" /E /XD .git /NFL /NDL /NJH /NJS /NP || ver >nul
 
+      # Stamp the current CI run id into UPSTREAM.lock.json for traceability
+      # (the file's `ciRunId` placeholder; not committed, used only during the run).
+      - name: Stamp CI run id into lock
+        shell: pwsh
+        run: |
+          $lock = "UPSTREAM.lock.json"
+          (Get-Content $lock -Raw) -replace '"ciRunId":\s*"[^"]*"', ('"ciRunId": "' + $env:GITHUB_RUN_ID + '"') | Set-Content $lock
+          Write-Host "stamped ciRunId = $env:GITHUB_RUN_ID"
+
       - name: Setup pnpm 11.7.0
         uses: pnpm/action-setup@v4
         with:
@@ -72,7 +81,7 @@ jobs:
             D:\wb\deepseek-harness\apps\cli\lib
             D:\wb\deepseek-harness\apps\web\dist
             D:\wb\deepseek-harness\packages\**\lib
-          key: harness-build-v1
+          key: harness-build-${{ hashFiles('UPSTREAM.lock.json') }}
           restore-keys: |
             harness-build-
 
@@ -80,7 +89,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.pnpm-store
-          key: pnpm-store-v1
+          key: pnpm-store-${{ hashFiles('UPSTREAM.lock.json') }}
           restore-keys: |
             pnpm-store-
 
@@ -93,10 +102,9 @@ jobs:
         shell: pwsh
         run: pwsh desktop/scripts/bundle-dsh.ps1 -HarnessDir ./deepseek-harness -OutDir ./dsh-dist
 
-      # Frontend has no committed lockfile (deps use ^ ranges); use `npm install`
-      # instead of `npm ci` which requires an existing package-lock.json.
-      - name: npm install (frontend deps)
-        run: npm install
+      # Frontend deps are pinned via the committed package-lock.json for reproducible builds.
+      - name: npm ci (frontend deps)
+        run: npm ci
 
       - name: Build frontend
         run: npm run build
