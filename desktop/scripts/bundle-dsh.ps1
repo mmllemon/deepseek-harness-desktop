@@ -42,6 +42,22 @@ try {
     Pop-Location
 }
 
+# Prune non-runtime artifacts from the deploy so the NSIS bundler (which
+# recursively packs the dsh-dist resource) doesn't choke on the very deep
+# type-declaration paths that pnpm's virtual store produces
+# (e.g. .../node_modules/.pnpm/@deepseek-ai+dsh-client-run_.../.../lib/types/.../*.d.ts).
+# .d.ts / .map / .tsbuildinfo / .flow are NEVER loaded by Node at runtime.
+Write-Host "==> pruning non-runtime files from dsh-dist"
+$pruneExt = '*.d.ts', '*.d.mts', '*.d.cts', '*.map', '*.tsbuildinfo', '*.flow'
+Get-ChildItem -Path $outAbs -Recurse -File -Include $pruneExt -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+# Type-only trees (lib/types) are also never needed at runtime; drop them to
+# remove the deepest path segments that trip up the NSIS File command.
+Get-ChildItem -Path $outAbs -Recurse -Directory -Filter types -ErrorAction SilentlyContinue |
+    Where-Object { ($_.FullName -replace '\\', '/') -match 'node_modules' } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "==> dsh-dist pruned"
+
 $entry = Join-Path $outAbs "lib/bin.js"
 if (-not (Test-Path $entry)) { Write-Error "deploy produced no entry: $entry"; exit 1 }
 Write-Host "OK dsh-dist ready: $entry"
