@@ -13,10 +13,24 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    # All `run` steps execute under the short path D:\wb so that the deepest
+    # pnpm virtual-store paths (e.g. @mistralai/mistralai/esm/models/operations/...)
+    # stay under Windows' MAX_PATH (260) when NSIS' `File /r` reads them.
+    # Without this, `makensis` aborts with "failed opening file" on long paths.
+    defaults:
+      run:
+        working-directory: D:\wb
 
     steps:
       - name: Checkout (desktop repo)
         uses: actions/checkout@v4
+
+      - name: Relocate source to short path D:\wb
+        shell: cmd
+        working-directory: D:\a
+        run: |
+          if exist D:\wb rmdir /s /q D:\wb
+          robocopy "%GITHUB_WORKSPACE%" "D:\wb" /E /XD .git /NFL /NDL /NJH /NJS /NP || ver >nul
 
       - name: Setup pnpm 11.7.0
         uses: pnpm/action-setup@v4
@@ -36,7 +50,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: D:\wb\src-tauri
 
       # ---- Pin & clone upstream deepseek-harness at the locked SHA ----
       # Single source of truth = UPSTREAM.lock.json. CI 不会使用未锁定的上游提交。
@@ -55,20 +69,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            deepseek-harness/apps/cli/lib
-            deepseek-harness/apps/web/dist
-            deepseek-harness/packages/**/lib
-          key: harness-${{ hashFiles('deepseek-harness/pnpm-lock.yaml') }}-${{ hashFiles('deepseek-harness/tsdown.config.ts') }}
+            D:\wb\deepseek-harness\apps\cli\lib
+            D:\wb\deepseek-harness\apps\web\dist
+            D:\wb\deepseek-harness\packages\**\lib
+          key: harness-build-v1
           restore-keys: |
-            harness-
+            harness-build-
 
       - name: Cache pnpm store
         uses: actions/cache@v4
         with:
           path: ~/.pnpm-store
-          key: pnpm-${{ hashFiles('deepseek-harness/pnpm-lock.yaml') }}
+          key: pnpm-store-v1
           restore-keys: |
-            pnpm-
+            pnpm-store-
 
       - name: Build harness
         shell: pwsh
