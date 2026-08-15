@@ -32,47 +32,46 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $outAbs = (Resolve-Path $OutDir).Path
 
 # ---------------------------------------------------------------------------
-# Fix: `pnpm deploy --prod` drops peerDependencies, but several harness packages
-# (notably @deepseek-ai/dsh-app-boot) import @deepseek-ai/* workspace packages at
-# runtime. Those are only declared as peers (host-provided by design), so they
-# never enter the deployed closure and the sidecar crashes with
-# ERR_MODULE_NOT_FOUND at smoke time. Promote every @deepseek-ai/* workspace peer
-# dep found anywhere in the harness to a regular dependency of the deployed root
-# (@deepseek-ai/dsh = apps/cli), then re-install so pnpm links them, so
-# `pnpm deploy` materializes them together with their full transitive closure.
+# Fix: `pnpm deploy --prod` only bundles the CLI's own dependency closure, but
+# the harness `web` profile dynamically imports a broad set of @deepseek-ai/*
+# workspace packages by name at runtime (e.g. @deepseek-ai/dsh-client-ui-goal,
+# @deepseek-ai/dsh-typert-loader, @deepseek-ai/dsh-client-ui-plan, ...). Those
+# are NOT in the CLI's transitive deps -- in a full workspace `pnpm install`
+# they resolve via hoisting, but in the deploy they go missing and the harness
+# crashes with ERR_MODULE_NOT_FOUND. Promote EVERY @deepseek-ai/* workspace
+# package to a dependency of the deployed root (@deepseek-ai/dsh = apps/cli) so
+# `pnpm deploy` materializes the entire workspace, guaranteeing any
+# profile-referenced package resolves. (This also covers the peer-only packages
+# like @deepseek-ai/cordis-plugin-group.)
 # ---------------------------------------------------------------------------
-Write-Host "==> promoting @deepseek-ai workspace peer deps to apps/cli dependencies"
+Write-Host "==> adding all @deepseek-ai workspace packages as apps/cli dependencies"
 $rootPkgPath = Join-Path $hDir "apps/cli/package.json"
 $rootPkg = Get-Content $rootPkgPath -Raw | ConvertFrom-Json
 if (-not $rootPkg.PSObject.Properties['dependencies']) {
     $rootPkg | Add-Member -NotePropertyName dependencies -NotePropertyValue ([PSCustomObject]@{})
 }
-$peerSet = @{}
+$wsPkgs = @{}
 $scanDirs = @()
-foreach ($d in @('apps', 'packages')) {
+foreach ($d in @('apps', 'packages', 'vendor')) {
     $p = Join-Path $hDir $d
     if (Test-Path $p) { $scanDirs += $p }
 }
 Get-ChildItem -Path $scanDirs -Recurse -Filter package.json -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } | ForEach-Object {
         try { $sp = Get-Content $_.FullName -Raw | ConvertFrom-Json } catch { return }
-        if ($sp.PSObject.Properties['peerDependencies']) {
-            $sp.peerDependencies.PSObject.Properties | ForEach-Object {
-                if ($_.Name -like '@deepseek-ai/*' -and ($_.Value -eq 'workspace:^' -or $_.Value -like 'workspace:*')) {
-                    $peerSet[$_.Name] = $_.Value
-                }
-            }
+        if ($sp.PSObject.Properties['name'] -and $sp.name -like '@deepseek-ai/*') {
+            $wsPkgs[$sp.name] = 'workspace:*'
         }
     }
-foreach ($k in $peerSet.Keys) {
+foreach ($k in $wsPkgs.Keys) {
     if (-not $rootPkg.dependencies.PSObject.Properties[$k]) {
-        $rootPkg.dependencies | Add-Member -NotePropertyName $k -NotePropertyValue $peerSet[$k] -Force
-        Write-Host "   + $k -> $($peerSet[$k])"
+        $rootPkg.dependencies | Add-Member -NotePropertyName $k -NotePropertyValue $wsPkgs[$k] -Force
+        Write-Host "   + $k"
     }
 }
 $rootPkg | ConvertTo-Json -Depth 50 | Set-Content -Encoding UTF8 $rootPkgPath
 
-Write-Host "==> pnpm install (relink promoted peers)"
+Write-Host "==> pnpm install --no-frozen-lockfile (relink promoted workspace packages)"
 Push-Location $hDir
 try {
     # CI sets frozen-lockfile=true by default; we just edited apps/cli/package.json,
