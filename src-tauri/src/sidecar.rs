@@ -59,6 +59,9 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
         .shell()
         .sidecar("node")
         .map_err(|e| e.to_string())?
+        // 参数顺序/个数必须与 capabilities/default.json 的 shell:allow-execute
+        // 白名单（§10.3 D4 / §13.8 D4）严格一致：[entry bin.js, "web", "--port", <port>]。
+        // 该白名单用正则校验，杜绝前端或越权路径注入额外参数。
         .args([entry_str, "web".into(), "--port".into(), port.to_string()])
         .envs(env)
         .spawn()

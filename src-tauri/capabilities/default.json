@@ -4,6 +4,9 @@
   "description": "桌面壳默认能力：最小授权原则。sidecar 仅允许 node 以 Tier 2 方式启动已部署的 harness 入口。",
   "windows": ["main"],
   "platforms": ["windows"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
   "permissions": [
     "core:default",
     "core:event:default",
@@ -19,7 +22,12 @@
         {
           "name": "binaries/node",
           "sidecar": true,
-          "args": true
+          "args": [
+            { "validator": "^.+[\\\\/]bin\\.js$" },
+            "web",
+            "--port",
+            { "validator": "^[0-9]{1,5}$" }
+          ]
         }
       ]
     }
