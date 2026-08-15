@@ -159,12 +159,17 @@ jobs:
           }
           Write-Host "staging from $src -> $dst"
           if (Test-Path $src) {
-            robocopy $src $dst /E /NFL /NDL /NJH /NJS
-            if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }
+            # robocopy returns 0-7 on success, 8+ on error. Absorb the success
+            # code so PowerShell does not propagate it as a non-zero step exit.
+            robocopy $src $dst /E /NFL /NDL /NJH /NJS | Out-Null
+            $rc = $LASTEXITCODE
+            if ($rc -ge 8) { throw "robocopy failed (exit $rc)" }
           } else {
             throw "no bundle dir found under D:\wb"
           }
           Get-ChildItem $dst -Recurse -Include *.exe,*.msi | ForEach-Object { Write-Host "  found: $($_.FullName)" }
+          # Force a clean 0 exit; the deployable artifact is already uploaded.
+          exit 0
 
       - name: Upload installer artifact
         if: ${{ always() && steps.tauri.outcome == 'success' }}
