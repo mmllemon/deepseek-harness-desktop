@@ -31,6 +31,56 @@ if (Test-Path $OutDir) { Remove-Item -Recurse -Force $OutDir }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $outAbs = (Resolve-Path $OutDir).Path
 
+# ---------------------------------------------------------------------------
+# Fix: `pnpm deploy --prod` drops peerDependencies, but several harness packages
+# (notably @deepseek-ai/dsh-app-boot) import @deepseek-ai/* workspace packages at
+# runtime. Those are only declared as peers (host-provided by design), so they
+# never enter the deployed closure and the sidecar crashes with
+# ERR_MODULE_NOT_FOUND at smoke time. Promote every @deepseek-ai/* workspace peer
+# dep found anywhere in the harness to a regular dependency of the deployed root
+# (@deepseek-ai/dsh = apps/cli), then re-install so pnpm links them, so
+# `pnpm deploy` materializes them together with their full transitive closure.
+# ---------------------------------------------------------------------------
+Write-Host "==> promoting @deepseek-ai workspace peer deps to apps/cli dependencies"
+$rootPkgPath = Join-Path $hDir "apps/cli/package.json"
+$rootPkg = Get-Content $rootPkgPath -Raw | ConvertFrom-Json
+if (-not $rootPkg.PSObject.Properties['dependencies']) {
+    $rootPkg | Add-Member -NotePropertyName dependencies -NotePropertyValue ([PSCustomObject]@{})
+}
+$peerSet = @{}
+$scanDirs = @()
+foreach ($d in @('apps', 'packages')) {
+    $p = Join-Path $hDir $d
+    if (Test-Path $p) { $scanDirs += $p }
+}
+Get-ChildItem -Path $scanDirs -Recurse -Filter package.json -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } | ForEach-Object {
+        try { $sp = Get-Content $_.FullName -Raw | ConvertFrom-Json } catch { return }
+        if ($sp.PSObject.Properties['peerDependencies']) {
+            $sp.peerDependencies.PSObject.Properties | ForEach-Object {
+                if ($_.Name -like '@deepseek-ai/*' -and ($_.Value -eq 'workspace:^' -or $_.Value -like 'workspace:*')) {
+                    $peerSet[$_.Name] = $_.Value
+                }
+            }
+        }
+    }
+foreach ($k in $peerSet.Keys) {
+    if (-not $rootPkg.dependencies.PSObject.Properties[$k]) {
+        $rootPkg.dependencies | Add-Member -NotePropertyName $k -NotePropertyValue $peerSet[$k] -Force
+        Write-Host "   + $k -> $($peerSet[$k])"
+    }
+}
+$rootPkg | ConvertTo-Json -Depth 50 | Set-Content -Encoding UTF8 $rootPkgPath
+
+Write-Host "==> pnpm install (relink promoted peers)"
+Push-Location $hDir
+try {
+    pnpm install
+    if ($LASTEXITCODE -ne 0) { throw "pnpm install failed (exit $LASTEXITCODE)" }
+} finally {
+    Pop-Location
+}
+
 Write-Host "==> pnpm deploy @deepseek-ai/dsh -> $outAbs"
 Push-Location $hDir
 try {
