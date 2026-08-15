@@ -10,9 +10,22 @@ permissions:
   contents: read
   actions: write
 
+# Cancel any in-progress run for the same ref when a new one starts. Without this,
+# a burst of pushes previously left 3+ jobs stuck on the runner for hours
+# (transient runner/cache glitches that block forever instead of failing fast).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Force non-interactive tooling (pnpm never prompts for build-script approval, etc.).
+env:
+  CI: "true"
+
 jobs:
   build-windows:
     runs-on: windows-latest
+    # Hard cap so a hung step fails in ~2h instead of burning the full 6h runner slot.
+    timeout-minutes: 120
     # All `run` steps execute under the short path D:\wb so that the deepest
     # pnpm virtual-store paths (e.g. @mistralai/mistralai/esm/models/operations/...)
     # stay under Windows' MAX_PATH (260) when NSIS' `File /r` reads them.

@@ -19,6 +19,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Ensure pnpm (and any other tooling) runs non-interactively. In CI this is normally
+# auto-detected, but being explicit prevents an interactive build-script approval
+# prompt from blocking the step forever on a headless runner.
+$env:CI = 'true'
+
 $harness = Resolve-Path $HarnessDir -ErrorAction SilentlyContinue
 if (-not $harness) {
     Write-Error "Harness directory not found: $HarnessDir"
