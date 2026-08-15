@@ -42,20 +42,6 @@
     "updater": {
       "endpoints": ["https://releases.<org>.com/{{target}}/{{arch}}/{{current_version}}"],
       "pubkey": "<update-pubkey>"
-    },
-    "shell": {
-      "scope": [
-        {
-          "name": "node",
-          "sidecar": true,
-          "args": [
-            { "validator": "^.+[\\\\/]bin\\.js$" },
-            "web",
-            "--port",
-            { "validator": "^[0-9]{1,5}$" }
-          ]
-        }
-      ]
     }
   }
 }
