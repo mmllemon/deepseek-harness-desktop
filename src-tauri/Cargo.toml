@@ -7,12 +7,16 @@ edition = "2021"
 rust-version = "1.77"
 
 [build-dependencies]
-tauri-build = { version = "=2.0.4" }
+# tauri-build and tauri-utils must stay on the same (3-arg external_binaries) generation,
+# otherwise the build script fails with a signature mismatch. Let tauri-build float to the
+# latest 2.x and pin tauri-utils to the matching sync release.
+tauri-build = { version = "2" }
+tauri-utils = { version = "=2.9.3" }
 
 [dependencies]
-tauri = { version = "=2.0.4", features = ["tray-icon"] }
-tauri-plugin-shell = "=2.0.2"
-tauri-plugin-updater = "=2.0.2"
+tauri = { version = "=2.2.5", features = ["tray-icon"] }
+tauri-plugin-shell = "=2.2.2"
+tauri-plugin-updater = "=2.2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
