@@ -47,15 +47,12 @@ try {
 # type-declaration paths that pnpm's virtual store produces
 # (e.g. .../node_modules/.pnpm/@deepseek-ai+dsh-client-run_.../.../lib/types/.../*.d.ts).
 # .d.ts / .map / .tsbuildinfo / .flow are NEVER loaded by Node at runtime.
+# NOTE: use native `cmd /c del /s` -- PowerShell's Get-ChildItem -Recurse pipeline
+# over a materialized pnpm store (millions of files) is catastrophically slow and
+# would hang the bundling step for 20+ minutes.
 Write-Host "==> pruning non-runtime files from dsh-dist"
-$pruneExt = '*.d.ts', '*.d.mts', '*.d.cts', '*.map', '*.tsbuildinfo', '*.flow'
-Get-ChildItem -Path $outAbs -Recurse -File -Include $pruneExt -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-# Type-only trees (lib/types) are also never needed at runtime; drop them to
-# remove the deepest path segments that trip up the NSIS File command.
-Get-ChildItem -Path $outAbs -Recurse -Directory -Filter types -ErrorAction SilentlyContinue |
-    Where-Object { ($_.FullName -replace '\\', '/') -match 'node_modules' } |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+$pat = '*.d.ts *.d.mts *.d.cts *.map *.tsbuildinfo *.flow'
+cmd /c "cd /d `"$outAbs`" && del /s /q $pat" 2>$null
 Write-Host "==> dsh-dist pruned"
 
 $entry = Join-Path $outAbs "lib/bin.js"
