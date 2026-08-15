@@ -75,7 +75,9 @@ $rootPkg | ConvertTo-Json -Depth 50 | Set-Content -Encoding UTF8 $rootPkgPath
 Write-Host "==> pnpm install (relink promoted peers)"
 Push-Location $hDir
 try {
-    pnpm install
+    # CI sets frozen-lockfile=true by default; we just edited apps/cli/package.json,
+    # so allow pnpm to refresh pnpm-lock.yaml in the (throwaway) clone.
+    pnpm install --no-frozen-lockfile
     if ($LASTEXITCODE -ne 0) { throw "pnpm install failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
