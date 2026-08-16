@@ -37,11 +37,5 @@
     "windows": {
       "webviewInstallMode": { "type": "offlineInstaller" }
     }
-  },
-  "plugins": {
-    "updater": {
-      "endpoints": ["https://releases.<org>.com/{{target}}/{{arch}}/{{current_version}}"],
-      "pubkey": "<update-pubkey>"
-    }
   }
 }
