@@ -15,7 +15,6 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:webview:default",
-    "updater:default",
     {
       "identifier": "shell:allow-execute",
       "allow": [
