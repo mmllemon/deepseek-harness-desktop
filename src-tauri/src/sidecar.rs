@@ -25,8 +25,26 @@ use crate::job;
 use crate::proxy;
 use crate::state::{AgentStatus, AppState, ChildHandle, LogLine, StateEvent};
 
+/// 临时诊断：把 spawn 关键步骤写入 exe 同目录的 sidecar_debug.log 并 eprintln。
+/// 用于远程定位「sidecar 未拉起」问题；稳定后可删除。
+fn dbg_log(msg: &str) {
+    let line = format!("[sidecar] {}\n", msg);
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), line.as_bytes());
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("sidecar_debug.log");
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&p)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+        }
+    }
+}
+
 /// 启动 dsh sidecar。若已在运行，直接返回当前状态。
 pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
+    dbg_log("spawn_dsh: enter");
     // 防重入：先释放锁再取状态，避免 current_status 内部再次加锁造成死锁。
     let already_running = {
         let state = app.state::<AppState>();
@@ -39,15 +57,31 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
 
     let cfg = app.state::<AppState>().config.lock().unwrap().clone();
     let home = config::resolve_dsh_home(app, &cfg);
-    config::write_settings_yaml(&home, &cfg)?;
+    dbg_log(&format!("spawn_dsh: dsh_home = {}", home.display()));
+    config::write_settings_yaml(&home, &cfg).map_err(|e| {
+        dbg_log(&format!("spawn_dsh: write_settings_yaml failed: {e}"));
+        e
+    })?;
     let env = config::build_env(&cfg, &home);
 
     let port = pick_port(cfg.server.port);
     let token = gen_token();
+    dbg_log(&format!("spawn_dsh: picked port={port}"));
 
     // 直接启动 node 外部二进制（显式解析路径，绕开 Tauri sidecar 机制）。
-    let node_bin = resolve_node(app)?;
-    let entry = resolve_entry(app)?;
+    let node_bin = resolve_node(app).map_err(|e| {
+        dbg_log(&format!("spawn_dsh: resolve_node failed: {e}"));
+        e
+    })?;
+    let entry = resolve_entry(app).map_err(|e| {
+        dbg_log(&format!("spawn_dsh: resolve_entry failed: {e}"));
+        e
+    })?;
+    dbg_log(&format!(
+        "spawn_dsh: node_bin={} entry={}",
+        node_bin.display(),
+        entry.display()
+    ));
 
     let mut cmd = Command::new(&node_bin);
     cmd.arg(&entry)
@@ -59,13 +93,17 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
         .stderr(Stdio::piped());
 
     let mut child = match cmd.spawn() {
-        Ok(c) => c,
+        Ok(c) => {
+            dbg_log("spawn_dsh: node spawned Ok");
+            c
+        }
         Err(e) => {
             let msg = format!(
                 "启动 dsh sidecar 失败: {e} (node={}, entry={})",
                 node_bin.display(),
                 entry.display()
             );
+            dbg_log(&format!("spawn_dsh: cmd.spawn failed: {e}"));
             // 同时回传 UI（查看日志 / 离线面板可见），避免静默卡死。
             let _ = app.emit("agent://error", msg.clone());
             return Err(msg);
