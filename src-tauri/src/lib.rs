@@ -10,7 +10,7 @@ mod state;
 mod tray;
 
 use state::{AgentStatus, AppConfig, AppState};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 启动 dsh sidecar（前端经 Tauri command 调用）。
 #[tauri::command]

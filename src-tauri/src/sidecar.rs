@@ -27,13 +27,14 @@ use crate::state::{AgentStatus, AppState, ChildHandle, LogLine, StateEvent};
 
 /// 启动 dsh sidecar。若已在运行，直接返回当前状态。
 pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
-    // 防重入
-    {
+    // 防重入：先释放锁再取状态，避免 current_status 内部再次加锁造成死锁。
+    let already_running = {
         let state = app.state::<AppState>();
         let inner = state.inner.lock().unwrap();
-        if inner.child.is_some() {
-            return Ok(current_status(app));
-        }
+        inner.child.is_some()
+    };
+    if already_running {
+        return Ok(current_status(app));
     }
 
     let cfg = app.state::<AppState>().config.lock().unwrap().clone();
@@ -106,7 +107,7 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
         let tok_out = token.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(out);
-            let mut ready = AtomicBool::new(false);
+            let ready = AtomicBool::new(false);
             for line in reader.lines() {
                 let line = match line {
                     Ok(l) => l,
