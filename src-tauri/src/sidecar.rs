@@ -1,17 +1,24 @@
 //! sidecar 进程生命周期（§4.1 / §10.7 / §12.5 / §12.7）。
 //! - Tier 2：以 `node` 外部二进制（随安装包分发）运行已部署的 harness 入口
 //!   `dsh-dist/lib/bin.js`（由 pnpm deploy 在打包阶段生成，见 build-windows.yml）。
+//! - 关键修复（2026-08）：不再依赖 `tauri_plugin_shell::sidecar()`。
+//!   该 API 依赖 Tauri 在构建期嵌入的外部二进制清单 + `shell:allow-execute` 作用域，
+//!   在 NSIS 扁平安装（资源直接落在安装根目录而非 `resources/` 子目录）时，
+//!   `sidecar("node")` 的内部解析/权限校验会静默失败且错误被吞掉，导致 Agent 永远卡在
+//!   「正在启动 Agent…」。改为直接用 `std::process::Command` 以显式绝对路径启动 node，
+//!   只要求安装目录下存在 node 二进制即可，与 Tauri 的 sidecar 解析机制彻底解耦。
 //! - 就绪探测：stdout URL 行优先，TCP connect 回退。
 //! - 进程树回收：优先 Tauri 进程管理；Windows 下 Job Object 兜底（§13.8 D8）。
 
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use base64::Engine;
 use rand::Rng;
 use tauri::{Emitter, Manager};
-use tauri_plugin_shell::process::CommandEvent;
-use tauri_plugin_shell::ShellExt;
 
 use crate::config;
 use crate::job;
@@ -37,36 +44,37 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     let port = pick_port(cfg.server.port);
     let token = gen_token();
 
-    // Tier 2 sidecar：以 `node` 外部二进制运行已部署的 harness 入口
-    // `dsh-dist/lib/bin.js`（pnpm deploy 在打包阶段生成，随安装包分发于资源目录）。
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("获取资源目录失败: {e}"))?;
-    let entry = resource_dir
-        .join("dsh-dist")
-        .join("lib")
-        .join("bin.js");
-    if !entry.exists() {
-        return Err(format!(
-            "找不到 harness 入口: {} (请确认打包阶段已生成 dsh-dist)",
-            entry.display()
-        ));
-    }
-    let entry_str = entry.to_string_lossy().to_string();
+    // 直接启动 node 外部二进制（显式解析路径，绕开 Tauri sidecar 机制）。
+    let node_bin = resolve_node(app)?;
+    let entry = resolve_entry(app)?;
 
-    let (mut rx, mut child) = app
-        .shell()
-        .sidecar("node")
-        .map_err(|e| e.to_string())?
-        // 参数顺序/个数必须与 capabilities/default.json 的 shell:allow-execute
-        // 白名单（§10.3 D4 / §13.8 D4）严格一致：[entry bin.js, "web", "--port", <port>]。
-        // 该白名单用正则校验，杜绝前端或越权路径注入额外参数。
-        .args([entry_str, "web".into(), "--port".into(), port.to_string()])
-        .envs(env)
-        .spawn()
-        .map_err(|e| format!("启动 dsh sidecar 失败: {e}"))?;
-    let pid = child.pid();
+    let mut cmd = Command::new(&node_bin);
+    cmd.arg(&entry)
+        .arg("web")
+        .arg("--port")
+        .arg(port.to_string())
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!(
+                "启动 dsh sidecar 失败: {e} (node={}, entry={})",
+                node_bin.display(),
+                entry.display()
+            );
+            // 同时回传 UI（查看日志 / 离线面板可见），避免静默卡死。
+            let _ = app.emit("agent://error", msg.clone());
+            return Err(msg);
+        }
+    };
+    let pid = child.id();
+
+    // 取走 stdout/stderr 管道，交给读取线程（child 本体随后存入状态）。
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
 
     // Windows Job Object 兜底（§4.1）
     let job = {
@@ -92,55 +100,69 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
         inner.last_error = None;
     }
 
-    let app2 = app.clone();
-    let token2 = token.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut ready = AtomicBool::new(false);
-        while let Some(ev) = rx.recv().await {
-            match ev {
-                CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
-                    let text = String::from_utf8_lossy(&b).to_string();
-                    for raw in text.split('\n') {
-                        let line = raw.trim_end().to_string();
-                        if line.is_empty() {
-                            continue;
-                        }
-                        let _ = app2.emit(
-                            "agent://log",
-                            LogLine {
-                                stream: "stdout".into(),
-                                line: line.clone(),
-                            },
-                        );
-                        // 就绪探测：stdout URL 行（§12.7）
-                        if !ready.load(Ordering::SeqCst)
-                            && line.contains("http://127.0.0.1")
-                            && line.contains(&format!(":{port}"))
-                        {
-                            ready.store(true, Ordering::SeqCst);
-                            let a = app2.clone();
-                            let t = token2.clone();
-                            on_ready(&a, port, &t).await;
-                        }
-                    }
+    // stdout 读取线程：转发日志 + 就绪探测（URL 行）。
+    if let Some(out) = stdout {
+        let app_out = app.clone();
+        let tok_out = token.clone();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(out);
+            let mut ready = AtomicBool::new(false);
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                let line = line.trim_end().to_string();
+                if line.is_empty() {
+                    continue;
                 }
-                CommandEvent::Terminated(_) => {
-                    emit_stopped(&app2, port);
-                    break;
+                let _ = app_out.emit(
+                    "agent://log",
+                    LogLine {
+                        stream: "stdout".into(),
+                        line: line.clone(),
+                    },
+                );
+                // 就绪探测：stdout URL 行（§12.7）
+                if !ready.load(Ordering::SeqCst)
+                    && line.contains("http://127.0.0.1")
+                    && line.contains(&format!(":{port}"))
+                {
+                    ready.store(true, Ordering::SeqCst);
+                    let a = app_out.clone();
+                    let t = tok_out.clone();
+                    tauri::async_runtime::spawn(async move {
+                        on_ready(&a, port, &t).await;
+                    });
                 }
-                CommandEvent::Error(e) => {
-                    let _ = app2.emit(
-                        "agent://log",
-                        LogLine {
-                            stream: "stderr".into(),
-                            line: format!("[error] {e}"),
-                        },
-                    );
-                }
-                _ => {}
             }
-        }
-    });
+        });
+    }
+
+    // stderr 读取线程：仅转发日志。
+    if let Some(err) = stderr {
+        let app_err = app.clone();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(err);
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                let line = line.trim_end().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                let _ = app_err.emit(
+                    "agent://log",
+                    LogLine {
+                        stream: "stderr".into(),
+                        line,
+                    },
+                );
+            }
+        });
+    }
 
     // TCP 回退探测（§12.7）
     let app3 = app.clone();
@@ -215,10 +237,7 @@ async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str) {
             );
         }
         Err(e) => {
-            let _ = app.emit(
-                "agent://error",
-                format!("本地反代启动失败: {e}"),
-            );
+            let _ = app.emit("agent://error", format!("本地反代启动失败: {e}"));
         }
     }
 }
@@ -273,6 +292,69 @@ pub fn current_status(app: &tauri::AppHandle) -> AgentStatus {
         proxy_url: inner.proxy_url.clone().unwrap_or_default(),
         pid: inner.child.as_ref().map(|c| c.pid),
     }
+}
+
+/// 显式解析 node 外部二进制：优先资源目录/安装根目录下的 triple 命名文件，
+/// 回退到 `node.exe`，并兼容 `binaries/` 子目录。任一存在即采用。
+fn resolve_node(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("获取 exe 路径失败: {e}"))?
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "无法获取 exe 父目录".to_string())?;
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("获取资源目录失败: {e}"))?;
+    let candidates = [
+        resource_dir.join("node-x86_64-pc-windows-msvc.exe"),
+        resource_dir.join("node.exe"),
+        exe_dir.join("node-x86_64-pc-windows-msvc.exe"),
+        exe_dir.join("node.exe"),
+        resource_dir.join("binaries").join("node-x86_64-pc-windows-msvc.exe"),
+        resource_dir.join("binaries").join("node.exe"),
+        exe_dir.join("binaries").join("node-x86_64-pc-windows-msvc.exe"),
+    ];
+    for c in &candidates {
+        if c.exists() {
+            return Ok(c.clone());
+        }
+    }
+    Err(format!(
+        "找不到 node 外部二进制，已尝试以下路径:\n{}",
+        candidates
+            .iter()
+            .map(|p| format!("  - {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
+/// 显式解析 harness 入口：资源目录或安装根目录下的 `dsh-dist/lib/bin.js`。
+fn resolve_entry(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("获取 exe 路径失败: {e}"))?
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "无法获取 exe 父目录".to_string())?;
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("获取资源目录失败: {e}"))?;
+    let bases = [resource_dir, exe_dir];
+    for base in &bases {
+        let e = base.join("dsh-dist").join("lib").join("bin.js");
+        if e.exists() {
+            return Ok(e);
+        }
+    }
+    Err(format!(
+        "找不到 harness 入口 dsh-dist/lib/bin.js，已尝试: {:?}",
+        bases
+            .iter()
+            .map(|b| b.join("dsh-dist").join("lib").join("bin.js"))
+            .collect::<Vec<_>>()
+    ))
 }
 
 /// 端口选择：优先首选端口，被占则顺延（§8 端口占用）。

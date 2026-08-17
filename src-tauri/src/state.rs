@@ -91,9 +91,10 @@ pub struct AgentStatus {
 }
 
 /// sidecar 进程句柄（持有以避免被 drop 导致子进程退出）。
+/// 注：node 由 `std::process::Command` 直接启动（不再经 tauri_plugin_shell 的 sidecar）。
 pub struct ChildHandle {
     pub pid: u32,
-    pub child: tauri_plugin_shell::process::CommandChild,
+    pub child: std::process::Child,
     #[cfg(windows)]
     pub job: Option<crate::job::job::JobHandle>,
 }

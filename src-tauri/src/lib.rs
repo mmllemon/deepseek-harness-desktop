@@ -103,7 +103,10 @@ pub fn run() {
             if autostart {
                 let a = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = sidecar::spawn_dsh(&a).await;
+                    if let Err(e) = sidecar::spawn_dsh(&a).await {
+                        // 不再静默吞错：回传 UI（查看日志 / 离线面板可见）。
+                        let _ = a.emit("agent://error", e);
+                    }
                 });
             }
             Ok(())
