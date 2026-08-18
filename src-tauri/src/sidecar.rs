@@ -25,23 +25,6 @@ use crate::job;
 use crate::proxy;
 use crate::state::{AgentStatus, AppState, ChildHandle, LogLine, StateEvent};
 
-/// 临时诊断：把 spawn 关键步骤写入 exe 同目录的 sidecar_debug.log 并 eprintln。
-/// 用于远程定位「sidecar 未拉起」问题；稳定后可删除。
-fn dbg_log(msg: &str) {
-    let line = format!("[sidecar] {}\n", msg);
-    let _ = std::io::Write::write_all(&mut std::io::stderr(), line.as_bytes());
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("sidecar_debug.log");
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&p)
-                .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
-        }
-    }
-}
-
 /// 去掉 Windows verbatim 路径前缀（`\\?\` / `\\?\UNC\`）。
 /// `std::env::current_exe()` 与 `fs::canonicalize()` 在 Windows 会返回该前缀，
 /// 直接作为 node 的脚本参数会导致 `Cannot find module 'D:\?\D:\...'` 而立即退出。
@@ -64,7 +47,6 @@ fn normalize_path(p: PathBuf) -> PathBuf {
 
 /// 启动 dsh sidecar。若已在运行，直接返回当前状态。
 pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
-    dbg_log("spawn_dsh: enter");
     // 防重入：先释放锁再取状态，避免 current_status 内部再次加锁造成死锁。
     let already_running = {
         let state = app.state::<AppState>();
@@ -77,34 +59,18 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
 
     let cfg = app.state::<AppState>().config.lock().unwrap().clone();
     let home = config::resolve_dsh_home(app, &cfg);
-    dbg_log(&format!("spawn_dsh: dsh_home = {}", home.display()));
-    config::write_settings_yaml(&home, &cfg).map_err(|e| {
-        dbg_log(&format!("spawn_dsh: write_settings_yaml failed: {e}"));
-        e
-    })?;
+    config::write_settings_yaml(&home, &cfg)?;
     let env = config::build_env(&cfg, &home);
 
     let port = pick_port(cfg.server.port);
     let token = gen_token();
-    dbg_log(&format!("spawn_dsh: picked port={port}"));
 
     // 直接启动 node 外部二进制（显式解析路径，绕开 Tauri sidecar 机制）。
     // Windows 下 current_exe()/resource_dir() 可能返回 `\\?\` verbatim 前缀，
     // node 无法把带该前缀的路径当作脚本模块解析（Cannot find module），
     // 必须先 normalize 去掉前缀再传给 node（2026-08 修复）。
-    let node_bin = normalize_path(resolve_node(app).map_err(|e| {
-        dbg_log(&format!("spawn_dsh: resolve_node failed: {e}"));
-        e
-    })?);
-    let entry = normalize_path(resolve_entry(app).map_err(|e| {
-        dbg_log(&format!("spawn_dsh: resolve_entry failed: {e}"));
-        e
-    })?);
-    dbg_log(&format!(
-        "spawn_dsh: node_bin={} entry={}",
-        node_bin.display(),
-        entry.display()
-    ));
+    let node_bin = normalize_path(resolve_node(app)?);
+    let entry = normalize_path(resolve_entry(app)?);
 
     let mut cmd = Command::new(&node_bin);
     cmd.arg(&entry)
@@ -116,18 +82,14 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
         .stderr(Stdio::piped());
 
     let mut child = match cmd.spawn() {
-        Ok(c) => {
-            dbg_log("spawn_dsh: node spawned Ok");
-            c
-        }
+        Ok(c) => c,
         Err(e) => {
             let msg = format!(
                 "启动 dsh sidecar 失败: {e} (node={}, entry={})",
                 node_bin.display(),
                 entry.display()
             );
-            dbg_log(&format!("spawn_dsh: cmd.spawn failed: {e}"));
-            // 同时回传 UI（查看日志 / 离线面板可见），避免静默卡死。
+            // 回传 UI（查看日志 / 离线面板可见），避免静默卡死。
             let _ = app.emit("agent://error", msg.clone());
             return Err(msg);
         }
