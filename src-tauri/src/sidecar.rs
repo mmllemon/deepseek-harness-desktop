@@ -42,6 +42,26 @@ fn dbg_log(msg: &str) {
     }
 }
 
+/// 去掉 Windows verbatim 路径前缀（`\\?\` / `\\?\UNC\`）。
+/// `std::env::current_exe()` 与 `fs::canonicalize()` 在 Windows 会返回该前缀，
+/// 直接作为 node 的脚本参数会导致 `Cannot find module 'D:\?\D:\...'` 而立即退出。
+#[cfg(windows)]
+fn normalize_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy().into_owned();
+    let stripped: &str = if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        rest
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest
+    } else {
+        &s
+    };
+    PathBuf::from(stripped)
+}
+#[cfg(not(windows))]
+fn normalize_path(p: PathBuf) -> PathBuf {
+    p
+}
+
 /// 启动 dsh sidecar。若已在运行，直接返回当前状态。
 pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     dbg_log("spawn_dsh: enter");
@@ -69,14 +89,17 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     dbg_log(&format!("spawn_dsh: picked port={port}"));
 
     // 直接启动 node 外部二进制（显式解析路径，绕开 Tauri sidecar 机制）。
-    let node_bin = resolve_node(app).map_err(|e| {
+    // Windows 下 current_exe()/resource_dir() 可能返回 `\\?\` verbatim 前缀，
+    // node 无法把带该前缀的路径当作脚本模块解析（Cannot find module），
+    // 必须先 normalize 去掉前缀再传给 node（2026-08 修复）。
+    let node_bin = normalize_path(resolve_node(app).map_err(|e| {
         dbg_log(&format!("spawn_dsh: resolve_node failed: {e}"));
         e
-    })?;
-    let entry = resolve_entry(app).map_err(|e| {
+    })?);
+    let entry = normalize_path(resolve_entry(app).map_err(|e| {
         dbg_log(&format!("spawn_dsh: resolve_entry failed: {e}"));
         e
-    })?;
+    })?);
     dbg_log(&format!(
         "spawn_dsh: node_bin={} entry={}",
         node_bin.display(),
