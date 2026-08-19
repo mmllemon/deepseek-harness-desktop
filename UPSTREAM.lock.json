@@ -2,13 +2,20 @@
   "harness": {
     "repo": "deepseek-ai/deepseek-harness",
     "branch": "master",
-    "sha": "47f943859bef60e4160492346772ded9b24f765a",
-    "npmVersion": "0.1.0-rc (see repo releases)",
+    "sha": "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca",
+    "npmVersion": "0.1.0-rc.7",
     "pkgVersion": "pin-at-build",
-    "date": "2026-08-13"
+    "date": "2026-08-17"
   },
   "desktopShell": "tauri",
   "ciRunId": "<filled-by-CI-at-runtime>",
   "dshDistSha": "<sha256-of-dsh-dist (optional; Tier 2 ships the self-contained dsh-dist resource, not a single dsh.exe)>",
-  "bumpLog": []
+  "bumpLog": [
+    {
+      "date": "2026-08-19",
+      "from": "47f943859bef60e4160492346772ded9b24f765a (2026-08-13)",
+      "to": "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca (2026-08-17, 0.1.0-rc.7)",
+      "note": "111 commits: release rc.6+rc.7, settings plugin-owned surface refactor (PR #2404), SessionPersistenceCorruptionError fix, history pagination stack-overflow fix, llm replay-state fix, low reasoning effort, node-pty beta bump"
+    }
+  ]
 }
