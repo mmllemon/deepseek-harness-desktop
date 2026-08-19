@@ -133,6 +133,53 @@ $pat = '*.d.ts *.d.mts *.d.cts *.map *.tsbuildinfo *.flow'
 cmd /c "cd /d `"$outAbs`" && del /s /q $pat" 2>$null
 Write-Host "==> dsh-dist pruned"
 
+# ---------------------------------------------------------------------------
+# Post-deploy patch: make dsh-settings.section() tolerate array-shaped
+# namespace sections instead of throwing.
+#
+# WHY: an upstream migration writes the `llm-pi-ai` settings namespace back
+# to settings.yaml as a bare ARRAY (e.g. `- name: openai ...`). dsh-settings'
+# section() calls isPlainObject() on it, fails, and THROWS
+# `settings section "llm-pi-ai" must be an object of keys`. That aborts the
+# namespace registration, so the frontend's protocolChoices() yields an empty
+# list and the "添加提供方 / 添加自定义提供方" buttons stay greyed out.
+#
+# This one-line tolerance (non-object section -> empty object) keeps the
+# buttons usable after EVERY upgrade. Without it, each fresh dsh-dist deploy
+# reverts the fix and the buttons break again until a manual hot-patch.
+# Patching here (at build time) makes the fix part of the shipped artifact.
+# ---------------------------------------------------------------------------
+Write-Host "==> patching dsh-settings section() array-tolerance"
+$settingsIdx = @()
+$store = Join-Path $outAbs "node_modules/.pnpm"
+if (Test-Path $store) {
+    $settingsIdx += Get-ChildItem -Path $store -Directory -Filter "@deepseek-ai+dsh-settings@*" -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName "node_modules/@deepseek-ai/dsh-settings/lib/index.js" } |
+        Where-Object { Test-Path $_ }
+}
+$top = Join-Path $outAbs "node_modules/@deepseek-ai/dsh-settings/lib/index.js"
+if (Test-Path $top) { $settingsIdx += $top }
+if ($settingsIdx.Count -eq 0) {
+    Write-Error "dsh-settings/lib/index.js not found in dsh-dist -- section() patch cannot be applied"
+    exit 1
+}
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$patchedCount = 0
+foreach ($idx in ($settingsIdx | Select-Object -Unique)) {
+    $raw = [System.IO.File]::ReadAllText($idx)
+    if ($raw -match 'throw new TypeError\(`settings section "\$\{ns\}" must be an object of keys`\)') {
+        $patched = $raw -replace 'if \(!isPlainObject\(section\)\) throw new TypeError\(`settings section "\$\{ns\}" must be an object of keys`\);', 'if (!isPlainObject(section)) return {};'
+        [System.IO.File]::WriteAllText($idx, $patched, $utf8NoBom)
+        $patchedCount++
+        Write-Host "   patched: $idx"
+    } else {
+        Write-Host "   already patched or shape changed: $idx"
+    }
+}
+if ($patchedCount -eq 0) { Write-Error "no dsh-settings index.js was patched -- verify the pattern still matches upstream"; exit 1 }
+Write-Host "==> dsh-settings section() patched ($patchedCount file(s))"
+
+
 # Verify native modules actually landed in the deploy. `pnpm deploy --legacy`
 # has been observed to silently drop third-party transitive natives; if they're
 # missing here, fail fast with a clear message instead of letting the smoke
