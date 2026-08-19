@@ -13,6 +13,8 @@
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -80,6 +82,10 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
         .envs(&env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    // Windows 下隐藏控制台窗口（CREATE_NO_WINDOW = 0x08000000）
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
