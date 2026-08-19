@@ -15,7 +15,7 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message as AMessage, WebSocket as AWebSocket, WebSocketUpgrade};
 use axum::extract::{OriginalUri, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
@@ -63,8 +63,8 @@ pub async fn start_proxy(agent_port: u16, token: String) -> Result<(u16, String)
 }
 
 /// 校验请求携带的 token（cookie `dsh_token` 或首次 query `t`）。
-fn valid_token(s: &ProxyState, uri: &OriginalUri, headers: &HeaderMap) -> bool {
-    let from_query = extract_query(uri.0.query().unwrap_or(""), "t");
+fn valid_token(s: &ProxyState, uri: &Uri, headers: &HeaderMap) -> bool {
+    let from_query = extract_query(uri.query().unwrap_or(""), "t");
     let from_cookie = extract_cookie(headers, "dsh_token");
     let provided = from_cookie.clone().or(from_query.clone());
     matches!(&provided, Some(t) if t == &s.token)
