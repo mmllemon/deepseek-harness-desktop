@@ -205,7 +205,7 @@ async fn ws_handler(
 }
 
 /// 双向透传：浏览器 <-> 上游，逐帧转发（含 Ping/Pong/Close）。
-async fn pipe(mut client: AWebSocket, mut upstream: UpstreamWs) {
+async fn pipe(client: AWebSocket, upstream: UpstreamWs) {
     let (mut cw, mut cr) = client.split();
     let (mut uw, mut ur) = upstream.split();
 
@@ -225,8 +225,10 @@ async fn pipe(mut client: AWebSocket, mut upstream: UpstreamWs) {
         while let Some(msg) = ur.next().await {
             match msg {
                 Ok(m) => {
-                    if cw.send(t_to_a(m)).await.is_err() {
-                        break;
+                    if let Some(am) = t_to_a(m) {
+                        if cw.send(am).await.is_err() {
+                            break;
+                        }
                     }
                 }
                 Err(_) => break,
@@ -244,7 +246,8 @@ async fn pipe(mut client: AWebSocket, mut upstream: UpstreamWs) {
     }
 }
 
-/// axum WS 消息 -> tungstenite WS 消息（类型在 axum 0.7 / tungstenite 0.21 下一致）。
+/// axum WS 消息 -> tungstenite WS 消息（axum 0.7 与 tungstenite 0.21 载荷类型一致：
+/// Text=String / Binary=Ping=Pong=Vec<u8>，直接透传；仅 Close 的 CloseFrame 类型不同）。
 fn a_to_t(m: AMessage) -> TMessage {
     match m {
         AMessage::Text(t) => TMessage::Text(t),
@@ -256,13 +259,16 @@ fn a_to_t(m: AMessage) -> TMessage {
 }
 
 /// tungstenite WS 消息 -> axum WS 消息。
-fn t_to_a(m: TMessage) -> AMessage {
+/// `Frame(_)` 是 tungstenite 0.21 独有的原始扩展帧，无法映射到 axum 的 `Message`，
+/// 返回 `None` 由调用方跳过。
+fn t_to_a(m: TMessage) -> Option<AMessage> {
     match m {
-        TMessage::Text(t) => AMessage::Text(t),
-        TMessage::Binary(b) => AMessage::Binary(b),
-        TMessage::Ping(b) => AMessage::Ping(b),
-        TMessage::Pong(b) => AMessage::Pong(b),
-        TMessage::Close(_) => AMessage::Close(None),
+        TMessage::Text(t) => Some(AMessage::Text(t)),
+        TMessage::Binary(b) => Some(AMessage::Binary(b)),
+        TMessage::Ping(b) => Some(AMessage::Ping(b)),
+        TMessage::Pong(b) => Some(AMessage::Pong(b)),
+        TMessage::Close(_) => Some(AMessage::Close(None)),
+        TMessage::Frame(_) => None,
     }
 }
 
