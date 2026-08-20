@@ -109,22 +109,6 @@ pub fn write_settings_yaml(home: &PathBuf, cfg: &AppConfig) -> Result<(), String
     std::fs::write(home.join("settings.yaml"), s).map_err(|e| e.to_string())
 }
 
-/// 从 `$DSH_HOME/settings.yaml` 读取已保存的主题偏好（用于 WebView localStorage 注入）。
-/// 返回 theme id，如 "angelina-dark"；若未设置或读取失败返回 None。
-pub fn read_theme_preference(home: &PathBuf) -> Option<String> {
-    let existing = home.join("settings.yaml");
-    if !existing.exists() {
-        return None;
-    }
-    let s = std::fs::read_to_string(&existing).ok()?;
-    let root: serde_yaml::Value = serde_yaml::from_str(&s).ok()?;
-    let mapping = root.as_mapping()?;
-    let theme_ns = mapping.get(&serde_yaml::Value::from("ui-theme"))?;
-    let theme_map = theme_ns.as_mapping()?;
-    let pref = theme_map.get(&serde_yaml::Value::from("preference"))?;
-    pref.as_str().map(|s| s.to_string())
-}
-
 // ---------------- keyring（API Key 持久化，不落明文文件） ----------------
 
 pub fn set_api_key(key: &str) -> Result<(), String> {

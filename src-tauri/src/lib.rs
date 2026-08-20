@@ -78,15 +78,6 @@ fn window_show(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 读取保存的主题偏好（用于前端初始化时恢复）。
-#[tauri::command]
-fn theme_get_preference() -> Result<String, String> {
-    // 使用环境变量获取 DSH_HOME（由 sidecar 设置）
-    let home = std::env::var("DSH_HOME").map_err(|_| "DSH_HOME not set")?;
-    let home_path = std::path::PathBuf::from(home);
-    config::read_theme_preference(&home_path).ok_or_else(|| "No theme preference found".to_string())
-}
-
 /// 应用入口（由 src/main.rs 调用）。
 pub fn run() {
     tauri::Builder::default()
@@ -129,7 +120,6 @@ pub fn run() {
             config_set,
             window_minimize_to_tray,
             window_show,
-            theme_get_preference
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

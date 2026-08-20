@@ -27,13 +27,21 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 pub struct ProxyState {
     pub agent_port: u16,
     pub token: String,
+    /// 主题 id（来自 AppConfig.ui.theme），注入 HTML 时写入 localStorage
+    pub theme: Option<String>,
 }
 
 /// 上游 WebSocket 流类型（明文字节，无 TLS）。
 type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// 启动反代，返回 (proxy_port, proxy_url)。proxy_url 含首次握手 token。
-pub async fn start_proxy(agent_port: u16, token: String) -> Result<(u16, String), String> {
+/// `initial_theme`：AppConfig.ui.theme 的初始值，用于注入插件 localStorage。
+/// 传 None 则不注入（其他用户未安装主题插件时不影响行为）。
+pub async fn start_proxy(
+    agent_port: u16,
+    token: String,
+    initial_theme: Option<String>,
+) -> Result<(u16, String), String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| e.to_string())?;
@@ -44,6 +52,7 @@ pub async fn start_proxy(agent_port: u16, token: String) -> Result<(u16, String)
     let state = Arc::new(ProxyState {
         agent_port,
         token: token.clone(),
+        theme: initial_theme,
     });
     // 仅 WS 端点走专用隧道 handler；其余全部回退到通用 HTTP handler。
     let app = Router::new()
@@ -140,6 +149,35 @@ async fn handler(
     match rb.send().await {
         Ok(resp) => {
             let status = resp.status();
+
+            // 主题注入：仅对 / 路径且响应为 text/html 时生效，写入插件的 localStorage key。
+            // 目的：解决 proxy 端口每次随机导致 origin 变化、localStorage 为空的问题。
+            let inject_script = {
+                let is_root = uri.path() == "/";
+                let ct = resp
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .starts_with("text/html");
+                s.theme.as_ref().filter(|t| !t.is_empty()).and_then(|theme_id| {
+                    if is_root && ct {
+                        Some(format!(
+                            r#"<script>(function(l){{try{{l.setItem('dsh-angelina-themes.selection','{q}')}}catch(e){{}}}})(typeof localStorage!=='undefined'?localStorage:{{setItem:function(){{}}}})}</script>"#,
+                            q = theme_id
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            // 收集完整字节（注入脚本需要知道 </head> 位置）
+            let bytes = match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => return (StatusCode::BAD_GATEWAY, format!("read upstream body failed: {e}")).into_response(),
+            };
+
             let mut builder = Response::builder().status(status);
             for (k, v) in resp.headers() {
                 let kn = k.as_str();
@@ -154,13 +192,24 @@ async fn handler(
             if let Some(c) = &set_cookie {
                 builder = builder.header("set-cookie", c);
             }
-            let stream = resp
-                .bytes_stream()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-            match builder.body(Body::from_stream(stream)) {
-                Ok(r) => r,
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-            }
+
+            let body = if let Some(script) = &inject_script {
+                let modified = if let Some(pos) = bytes.windows(7).position(|w| w == b"</head>") {
+                    let mut out = bytes[..pos + 7].to_vec();
+                    out.extend_from_slice(script.as_bytes());
+                    out.extend_from_slice(&bytes[pos + 7..]);
+                    out
+                } else {
+                    let mut out = bytes.to_vec();
+                    out.extend_from_slice(script.as_bytes());
+                    out
+                };
+                Body::from(modified)
+            } else {
+                Body::from(bytes)
+            };
+
+            builder.body(body).unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "build response failed").into_response())
         }
         Err(e) => (StatusCode::BAD_GATEWAY, format!("upstream error: {e}")).into_response(),
     }

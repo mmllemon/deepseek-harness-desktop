@@ -230,7 +230,10 @@ async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str) {
             return;
         }
     }
-    match proxy::start_proxy(agent_port, token.to_string()).await {
+    match proxy::start_proxy(agent_port, token.to_string(), {
+        let cfg = app.state::<AppState>().config.lock().unwrap().clone();
+        if cfg.ui.theme.is_empty() { None } else { Some(cfg.ui.theme) }
+    }).await {
         Ok((proxy_port, proxy_url)) => {
             let state = app.state::<AppState>();
             let pid = state

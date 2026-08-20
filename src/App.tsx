@@ -14,7 +14,6 @@ import {
   listenReady,
   listenState,
   minimize,
-  getThemePreference,
   type LogLine,
   type Status,
 } from './api'
@@ -61,15 +60,6 @@ export default function App() {
     void navigateWebview(url).catch((e: unknown) => {
       navigated.current = false
       setOffline(`加载界面失败：${String(e)}`)
-    })
-  }, [])
-
-  // 启动时恢复主题偏好
-  useEffect(() => {
-    getThemePreference().then((theme) => {
-      localStorage.setItem('dsh-angelina-themes.selection', theme)
-    }).catch(() => {
-      // 忽略错误，不设置主题
     })
   }, [])
 
