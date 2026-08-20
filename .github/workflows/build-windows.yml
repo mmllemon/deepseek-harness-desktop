@@ -144,9 +144,24 @@ jobs:
             Write-Host "staged node sidecar: $dest ($([math]::Round((Get-Item $dest).Length/1MB,2)) MB)"
           }
 
+      # 诊断增强（临时）：把 Tauri 构建的完整输出落盘，并在失败时把错误尾部作为
+      # ::error:: 注解回显，使无 token 的环境也能通过 run 页面的 Annotations 读到真实报错。
       - name: Tauri build
         id: tauri
-        run: npm run tauri build
+        shell: pwsh
+        run: |
+          $proc = Start-Process -NoNewWindow -FilePath "npm" -ArgumentList "run","tauri","build" `
+            -RedirectStandardOutput "/d/wb/tauri_stdout.log" -RedirectStandardError "/d/wb/tauri_stderr.log" -PassThru
+          $proc.WaitForExit()
+          $out = (Get-Content "/d/wb/tauri_stdout.log" -Raw -ErrorAction SilentlyContinue)
+          $err = (Get-Content "/d/wb/tauri_stderr.log" -Raw -ErrorAction SilentlyContinue)
+          $log = "$out`n$err"
+          Write-Host $log
+          if ($proc.ExitCode -ne 0) {
+            $tail = (($log -split "`n") | Select-Object -Last 80) -join "%0A"
+            Write-Output "::error::TAURI BUILD FAILED (exit $($proc.ExitCode))`n$tail"
+          }
+          exit $proc.ExitCode
 
       # ---- code signing (placeholder) ----
       # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
