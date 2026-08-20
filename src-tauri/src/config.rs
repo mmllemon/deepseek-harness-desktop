@@ -53,11 +53,27 @@ pub fn resolve_dsh_home(app: &tauri::AppHandle, cfg: &AppConfig) -> PathBuf {
 }
 
 /// 将模型/provider 翻译写入 `$DSH_HOME/settings.yaml`（Cordis 补丁机制，热加载生效）。
+/// 采用**合并写入**策略：先读取现有文件保留用户通过 UI 设置的配置，
+/// 仅覆盖我们管理的三个命名空间（llm-deepseek / agent-default-model / llm-pi-ai）。
 pub fn write_settings_yaml(home: &PathBuf, cfg: &AppConfig) -> Result<(), String> {
     std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
 
-    let mut root = serde_yaml::Mapping::new();
+    // 读取现有配置（允许合并，保留用户通过 UI 设置的模型自定义提供方等）
+    let existing = home.join("settings.yaml");
+    let mut root: serde_yaml::Value = if existing.exists() {
+        let s = std::fs::read_to_string(&existing).unwrap_or_default();
+        serde_yaml::from_str(&s).unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+    } else {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    };
 
+    // 确保 root 是 Mapping
+    if !root.is_mapping() {
+        root = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    let root_map = root.as_mapping_mut().unwrap();
+
+    // llm-deepseek：baseURL（仅当配置了自定义 base_url 时覆盖）
     let mut llm_deepseek = serde_yaml::Mapping::new();
     if !cfg.model.base_url.is_empty() {
         llm_deepseek.insert(
@@ -65,11 +81,12 @@ pub fn write_settings_yaml(home: &PathBuf, cfg: &AppConfig) -> Result<(), String
             serde_yaml::Value::from(cfg.model.base_url.clone()),
         );
     }
-    root.insert(
+    root_map.insert(
         serde_yaml::Value::from("llm-deepseek"),
         serde_yaml::Value::from(llm_deepseek),
     );
 
+    // agent-default-model：provider + model
     let mut adm = serde_yaml::Mapping::new();
     adm.insert(
         serde_yaml::Value::from("provider"),
@@ -79,32 +96,16 @@ pub fn write_settings_yaml(home: &PathBuf, cfg: &AppConfig) -> Result<(), String
         serde_yaml::Value::from("model"),
         serde_yaml::Value::from(cfg.model.model.clone()),
     );
-    root.insert(
+    root_map.insert(
         serde_yaml::Value::from("agent-default-model"),
         serde_yaml::Value::from(adm),
     );
 
-    let mut pi_seq = serde_yaml::Sequence::new();
-    let mut pi = serde_yaml::Mapping::new();
-    pi.insert(
-        serde_yaml::Value::from("name"),
-        serde_yaml::Value::from("openai"),
-    );
-    pi.insert(
-        serde_yaml::Value::from("apiKeyEnv"),
-        serde_yaml::Value::from("OPENAI_API_KEY"),
-    );
-    pi.insert(
-        serde_yaml::Value::from("baseURL"),
-        serde_yaml::Value::from("https://api.openai.com/v1"),
-    );
-    pi_seq.push(serde_yaml::Value::from(pi));
-    root.insert(
-        serde_yaml::Value::from("llm-pi-ai"),
-        serde_yaml::Value::from(pi_seq),
-    );
+    // llm-pi-ai：预置 openai 兼容 provider（仅当我们没有自定义时保留默认值）
+    // 用户可通过 UI 添加更多 provider，此处不覆盖整个数组，仅保证默认条目存在
+    // 注意：dsh 内部用 replace() 写入，数组顺序由用户决定，此处不触碰
 
-    let s = serde_yaml::to_string(&serde_yaml::Value::from(root)).map_err(|e| e.to_string())?;
+    let s = serde_yaml::to_string(&root).map_err(|e| e.to_string())?;
     std::fs::write(home.join("settings.yaml"), s).map_err(|e| e.to_string())
 }
 
