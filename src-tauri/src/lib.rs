@@ -92,6 +92,18 @@ pub fn run() {
             // 托盘
             tray::build_tray(&handle)?;
 
+            // 恢复主题偏好到 localStorage（解决 origin 隔离导致主题丢失的问题）
+            let home = config::resolve_dsh_home(&handle, &cfg);
+            if let Some(theme) = config::read_theme_preference(&home) {
+                if let Some(w) = handle.get_webview_window("main") {
+                    let script = format!(
+                        "localStorage.setItem('dsh-angelina-themes.selection', '{}')",
+                        theme
+                    );
+                    let _ = w.eval(&script);
+                }
+            }
+
             // 自动启动
             let autostart = handle
                 .state::<AppState>()
