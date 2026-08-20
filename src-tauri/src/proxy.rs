@@ -163,7 +163,7 @@ async fn handler(
                 s.theme.as_ref().filter(|t| !t.is_empty()).and_then(|theme_id| {
                     if is_root && ct {
                         Some(format!(
-                            r#"<script>(function(l){{try{{l.setItem('dsh-angelina-themes.selection','{q}')}}catch(e){{}}}})(typeof localStorage!=='undefined'?localStorage:{{setItem:function(){{}}}})}</script>"#,
+                            r#"<script>(function(l){{try{{l.setItem('dsh-angelina-themes.selection','{q}')}}catch(e){{}}}})(typeof localStorage!=='undefined'?localStorage:{{setItem:function(){{}}}})</script>"#,
                             q = theme_id
                         ))
                     } else {
