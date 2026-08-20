@@ -78,6 +78,15 @@ fn window_show(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 读取保存的主题偏好（用于前端初始化时恢复）。
+#[tauri::command]
+fn theme_get_preference() -> Result<String, String> {
+    // 使用环境变量获取 DSH_HOME（由 sidecar 设置）
+    let home = std::env::var("DSH_HOME").map_err(|_| "DSH_HOME not set")?;
+    let home_path = std::path::PathBuf::from(home);
+    config::read_theme_preference(&home_path).ok_or_else(|| "No theme preference found".to_string())
+}
+
 /// 应用入口（由 src/main.rs 调用）。
 pub fn run() {
     tauri::Builder::default()
@@ -91,24 +100,6 @@ pub fn run() {
 
             // 托盘
             tray::build_tray(&handle)?;
-
-            // 恢复主题偏好到 localStorage（解决 origin 隔离导致主题丢失的问题）
-            // 在窗口创建后注入，因为 setup 时窗口还未存在
-            let home = config::resolve_dsh_home(&handle, &cfg);
-            if let Some(theme) = config::read_theme_preference(&home) {
-                let script = format!(
-                    "localStorage.setItem('dsh-angelina-themes.selection', '{}')",
-                    theme
-                );
-                handle.listen_global("tauri://window-created", move |event| {
-                    let payload = event.payload();
-                    if payload == "main" {
-                        if let Some(w) = handle.get_webview_window("main") {
-                            let _ = w.eval(&script);
-                        }
-                    }
-                });
-            }
 
             // 自动启动
             let autostart = handle
@@ -137,7 +128,8 @@ pub fn run() {
             config_get,
             config_set,
             window_minimize_to_tray,
-            window_show
+            window_show,
+            theme_get_preference
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

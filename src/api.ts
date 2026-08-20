@@ -129,6 +129,8 @@ export const minimize = (): Promise<void> => invoke<void>('window_minimize_to_tr
 
 export const show = (): Promise<void> => invoke<void>('window_show')
 
+export const getThemePreference = (): Promise<string> => invoke<string>('theme_get_preference')
+
 // ---------------- 事件监听（返回的 unlisten 需在卸载时调用） ----------------
 
 export function listenLog(cb: (log: LogLine) => void): Promise<UnlistenFn> {
