@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 # Cancel any in-progress run for the same ref when a new one starts. Without this,
@@ -170,6 +170,35 @@ jobs:
             Write-Output "::error::TAURI BUILD STEP ERROR: $_"
             exit 1
           }
+
+      # 诊断：Tauri build 失败时，把完整日志推送到 ci-debug-logs 分支（该分支不在
+      # on.push.branches 内，不会重新触发本 workflow；另含 [skip ci] 双保险）。
+      # 这样无 token 的本地环境也能用 `git fetch origin ci-debug-logs` 直接读到真实 cargo 报错。
+      - name: Push build logs on failure
+        if: ${{ steps.tauri.outcome == 'failure' }}
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/mmllemon/deepseek-harness-desktop.git"
+          New-Item -ItemType Directory -Force -Path ci-debug | Out-Null
+          $maxLines = 4000
+          if (Test-Path "D:\wb\tauri_stderr.log") {
+            $lines = Get-Content "D:\wb\tauri_stderr.log" -Tail $maxLines
+            $lines | Set-Content "ci-debug/tauri_stderr.log"
+            ($lines | Where-Object { $_ -match 'error' } | Select-Object -Last 300) -join "`n" | Set-Content "ci-debug/error-extract.txt"
+          } else {
+            "NO D:\wb\tauri_stderr.log found" | Set-Content "ci-debug/error-extract.txt"
+          }
+          if (Test-Path "D:\wb\tauri_stdout.log") {
+            (Get-Content "D:\wb\tauri_stdout.log" -Tail 1500) | Set-Content "ci-debug/tauri_stdout.log"
+          }
+          git config user.email "ci-debug@users.noreply.github.com"
+          git config user.name "ci-debug"
+          git add ci-debug/
+          git commit -m "ci: debug build logs [skip ci]"
+          git push origin HEAD:ci-debug-logs
 
       # ---- code signing (placeholder) ----
       # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
