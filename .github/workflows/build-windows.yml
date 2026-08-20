@@ -171,13 +171,15 @@ jobs:
             exit $code
           } catch {
             Write-Output "::error::TAURI BUILD STEP ERROR: $_"
+            "TAURI BUILD STEP ERROR: $_" | Set-Content "D:\wb\tauri_stderr.log" -Force
+            New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
             exit 1
           }
 
       # 诊断：Tauri build 失败时，把完整日志推送到 ci-debug-logs 分支（该分支不在
       # on.push.branches 内，不会重新触发本 workflow；另含 [skip ci] 双保险）。
       # 这样无 token 的本地环境也能用 `git fetch origin ci-debug-logs` 直接读到真实 cargo 报错。
-      # 用 always() + BUILD_FAILED 标记判断，避免依赖 steps.<id>.outcome 的条件不确定性。
+      # 直接以 tauri_stderr.log 是否存在且非空作为失败信号（不依赖 marker 文件）。
       - name: Push build logs on failure
         if: ${{ always() }}
         shell: pwsh
@@ -185,22 +187,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if (-not (Test-Path "D:\wb\BUILD_FAILED")) {
-            Write-Host "build did not fail (no BUILD_FAILED marker) — skipping log push"
+          $errFile = "D:\wb\tauri_stderr.log"
+          $outFile = "D:\wb\tauri_stdout.log"
+          $errContent = ""
+          if (Test-Path $errFile) { $errContent = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue) }
+          if ([string]::IsNullOrWhiteSpace($errContent)) {
+            Write-Host "no tauri_stderr.log content — build likely succeeded, skipping log push"
             exit 0
           }
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/mmllemon/deepseek-harness-desktop.git"
           New-Item -ItemType Directory -Force -Path ci-debug | Out-Null
           $maxLines = 4000
-          if (Test-Path "D:\wb\tauri_stderr.log") {
-            $lines = Get-Content "D:\wb\tauri_stderr.log" -Tail $maxLines
-            $lines | Set-Content "ci-debug/tauri_stderr.log"
-            ($lines | Where-Object { $_ -match 'error' } | Select-Object -Last 300) -join "`n" | Set-Content "ci-debug/error-extract.txt"
-          } else {
-            "NO D:\wb\tauri_stderr.log found" | Set-Content "ci-debug/error-extract.txt"
-          }
-          if (Test-Path "D:\wb\tauri_stdout.log") {
-            (Get-Content "D:\wb\tauri_stdout.log" -Tail 1500) | Set-Content "ci-debug/tauri_stdout.log"
+          $lines = Get-Content $errFile -Tail $maxLines
+          $lines | Set-Content "ci-debug/tauri_stderr.log"
+          ($lines | Where-Object { $_ -match 'error' } | Select-Object -Last 300) -join "`n" | Set-Content "ci-debug/error-extract.txt"
+          if (Test-Path $outFile) {
+            (Get-Content $outFile -Tail 1500) | Set-Content "ci-debug/tauri_stdout.log"
           }
           git config user.email "ci-debug@users.noreply.github.com"
           git config user.name "ci-debug"
