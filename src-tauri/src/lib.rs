@@ -93,15 +93,21 @@ pub fn run() {
             tray::build_tray(&handle)?;
 
             // 恢复主题偏好到 localStorage（解决 origin 隔离导致主题丢失的问题）
+            // 在窗口创建后注入，因为 setup 时窗口还未存在
             let home = config::resolve_dsh_home(&handle, &cfg);
             if let Some(theme) = config::read_theme_preference(&home) {
-                if let Some(w) = handle.get_webview_window("main") {
-                    let script = format!(
-                        "localStorage.setItem('dsh-angelina-themes.selection', '{}')",
-                        theme
-                    );
-                    let _ = w.eval(&script);
-                }
+                let script = format!(
+                    "localStorage.setItem('dsh-angelina-themes.selection', '{}')",
+                    theme
+                );
+                handle.listen_global("tauri://window-created", move |event| {
+                    let payload = event.payload();
+                    if payload == "main" {
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let _ = w.eval(&script);
+                        }
+                    }
+                });
             }
 
             // 自动启动
