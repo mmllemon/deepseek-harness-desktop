@@ -145,23 +145,31 @@ jobs:
           }
 
       # 诊断增强（临时）：把 Tauri 构建的完整输出落盘，并在失败时把错误尾部作为
-      # ::error:: 注解回显，使无 token 的环境也能通过 run 页面的 Annotations 读到真实报错。
+      # 单行 ::error:: 注解（用 %0A 表示换行，避免拆成多行丢失内容）回显，
+      # 同时写入 step summary，使无 token 的环境也能通过 run 页面读到真实报错。
       - name: Tauri build
         id: tauri
         shell: pwsh
         run: |
-          $proc = Start-Process -NoNewWindow -FilePath "npm" -ArgumentList "run","tauri","build" `
-            -RedirectStandardOutput "/d/wb/tauri_stdout.log" -RedirectStandardError "/d/wb/tauri_stderr.log" -PassThru
-          $proc.WaitForExit()
-          $out = (Get-Content "/d/wb/tauri_stdout.log" -Raw -ErrorAction SilentlyContinue)
-          $err = (Get-Content "/d/wb/tauri_stderr.log" -Raw -ErrorAction SilentlyContinue)
-          $log = "$out`n$err"
-          Write-Host $log
-          if ($proc.ExitCode -ne 0) {
-            $tail = (($log -split "`n") | Select-Object -Last 80) -join "%0A"
-            Write-Output "::error::TAURI BUILD FAILED (exit $($proc.ExitCode))`n$tail"
+          try {
+            $p = Start-Process -NoNewWindow -FilePath "npm" -ArgumentList "run","tauri","build" `
+              -RedirectStandardOutput "/d/wb/tauri_stdout.log" -RedirectStandardError "/d/wb/tauri_stderr.log" -PassThru
+            $p.WaitForExit()
+            $code = $p.ExitCode
+            $out = (Get-Content "/d/wb/tauri_stdout.log" -Raw -ErrorAction SilentlyContinue)
+            $err = (Get-Content "/d/wb/tauri_stderr.log" -Raw -ErrorAction SilentlyContinue)
+            $log = "$out`n$err"
+            Write-Host $log
+            if ($code -ne 0) {
+              $tail = (($log -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50) -join "%0A"
+              Write-Output ("::error::TAURI BUILD FAILED (exit {0})%0A{1}" -f $code, $tail)
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("## Tauri build failed (exit {0})`n`n``````n{1}`n`n`````" -f $code, ($tail -replace "%0A", "`n"))
+            }
+            exit $code
+          } catch {
+            Write-Output "::error::TAURI BUILD STEP ERROR: $_"
+            exit 1
           }
-          exit $proc.ExitCode
 
       # ---- code signing (placeholder) ----
       # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
