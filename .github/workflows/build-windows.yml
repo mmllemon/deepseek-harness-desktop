@@ -164,6 +164,8 @@ jobs:
               $tail = (($log -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50) -join "%0A"
               Write-Output ("::error::TAURI BUILD FAILED (exit {0})%0A{1}" -f $code, $tail)
               Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("## Tauri build failed (exit {0})`n`n``````n{1}`n`n`````" -f $code, ($tail -replace "%0A", "`n"))
+              # 标记文件：供后续 Push build logs 步骤判断（避免依赖 steps.<id>.outcome 的条件不确定性）。
+              New-Item -ItemType File -Force -Path "/d/wb/BUILD_FAILED" | Out-Null
             }
             exit $code
           } catch {
@@ -174,13 +176,18 @@ jobs:
       # 诊断：Tauri build 失败时，把完整日志推送到 ci-debug-logs 分支（该分支不在
       # on.push.branches 内，不会重新触发本 workflow；另含 [skip ci] 双保险）。
       # 这样无 token 的本地环境也能用 `git fetch origin ci-debug-logs` 直接读到真实 cargo 报错。
+      # 用 always() + BUILD_FAILED 标记判断，避免依赖 steps.<id>.outcome 的条件不确定性。
       - name: Push build logs on failure
-        if: ${{ steps.tauri.outcome == 'failure' }}
+        if: ${{ always() }}
         shell: pwsh
         working-directory: ${{ github.workspace }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if (-not (Test-Path "D:\wb\BUILD_FAILED")) {
+            Write-Host "build did not fail (no BUILD_FAILED marker) — skipping log push"
+            exit 0
+          }
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/mmllemon/deepseek-harness-desktop.git"
           New-Item -ItemType Directory -Force -Path ci-debug | Out-Null
           $maxLines = 4000
