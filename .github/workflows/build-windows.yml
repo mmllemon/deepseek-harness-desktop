@@ -164,9 +164,11 @@ jobs:
               $tail = (($log -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50) -join "%0A"
               Write-Output ("::error::TAURI BUILD FAILED (exit {0})%0A{1}" -f $code, $tail)
               Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("## Tauri build failed (exit {0})`n`n``````n{1}`n`n`````" -f $code, ($tail -replace "%0A", "`n"))
-              # 标记文件：供后续 Push build logs 步骤判断（避免依赖 steps.<id>.outcome 的条件不确定性）。
+              # 标记文件：供后续 Push build logs 步骤判断。
               # 注意：必须用 Windows 绝对路径 D:\wb\...，不能用 /d/wb/（PowerShell 会解析成 D:\d\wb\...）。
               New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
+              # 即使 stderr 为空也记录退出码，供诊断
+              "EXIT_CODE=$code`nSTDERR_LENGTH=$($err.Length)`nSTDOUT_LENGTH=$($out.Length)" | Set-Content "D:\wb\BUILD_MARKER.txt" -Force
             }
             exit $code
           } catch {
@@ -179,7 +181,7 @@ jobs:
       # 诊断：Tauri build 失败时，把完整日志推送到 ci-debug-logs 分支（该分支不在
       # on.push.branches 内，不会重新触发本 workflow；另含 [skip ci] 双保险）。
       # 这样无 token 的本地环境也能用 `git fetch origin ci-debug-logs` 直接读到真实 cargo 报错。
-      # 直接以 tauri_stderr.log 是否存在且非空作为失败信号（不依赖 marker 文件）。
+      # 以 BUILD_FAILED 标记或 stderr/stdout 内容为判断依据。
       - name: Push build logs on failure
         if: ${{ always() }}
         shell: pwsh
@@ -187,22 +189,50 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $markerFile = "D:\wb\BUILD_FAILED"
           $errFile = "D:\wb\tauri_stderr.log"
           $outFile = "D:\wb\tauri_stdout.log"
-          $errContent = ""
-          if (Test-Path $errFile) { $errContent = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue) }
-          if ([string]::IsNullOrWhiteSpace($errContent)) {
-            Write-Host "no tauri_stderr.log content — build likely succeeded, skipping log push"
+          $markerTxt = "D:\wb\BUILD_MARKER.txt"
+          # 判断条件：有 BUILD_FAILED 标记，或 stderr/stdout 非空
+          $shouldPush = (Test-Path $markerFile) -or
+                        (-not [string]::IsNullOrWhiteSpace((Get-Content $errFile -Raw -ErrorAction SilentlyContinue))) -or
+                        (-not [string]::IsNullOrWhiteSpace((Get-Content $outFile -Raw -ErrorAction SilentlyContinue)))
+          if (-not $shouldPush) {
+            Write-Host "build likely succeeded (no marker, no stderr, no stdout) — skipping log push"
             exit 0
           }
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/mmllemon/deepseek-harness-desktop.git"
           New-Item -ItemType Directory -Force -Path ci-debug | Out-Null
           $maxLines = 4000
-          $lines = Get-Content $errFile -Tail $maxLines
-          $lines | Set-Content "ci-debug/tauri_stderr.log"
-          ($lines | Where-Object { $_ -match 'error' } | Select-Object -Last 300) -join "`n" | Set-Content "ci-debug/error-extract.txt"
+          if (Test-Path $errFile) {
+            $lines = Get-Content $errFile -Tail $maxLines
+            $lines | Set-Content "ci-debug/tauri_stderr.log"
+            ($lines | Where-Object { $_ -match 'error' } | Select-Object -Last 300) -join "`n" | Set-Content "ci-debug/error-extract.txt"
+          } else {
+            "NO tauri_stderr.log found" | Set-Content "ci-debug/error-extract.txt"
+          }
           if (Test-Path $outFile) {
             (Get-Content $outFile -Tail 1500) | Set-Content "ci-debug/tauri_stdout.log"
+          }
+          if (Test-Path $markerTxt) {
+            Get-Content $markerTxt | Set-Content "ci-debug/BUILD_MARKER.txt"
+          }
+          # 检查是否有安装程序产物（帮助判断失败发生在哪一阶段）
+          $bundleDirs = @(
+            "D:\wb\src-tauri\target\release\bundle",
+            "D:\wb\src-tauri\target\x86_64-pc-windows-msvc\release\bundle"
+          )
+          $bundleInfo = @()
+          foreach ($d in $bundleDirs) {
+            if (Test-Path $d) {
+              $files = Get-ChildItem $d -Recurse -File | Select-Object -ExpandProperty FullName
+              $bundleInfo += "FOUND $d`: $($files -join ', ')"
+            }
+          }
+          if ($bundleInfo) {
+            $bundleInfo -join "`n" | Set-Content "ci-debug/bundle-info.txt"
+          } else {
+            "NO BUNDLE DIR FOUND" | Set-Content "ci-debug/bundle-info.txt"
           }
           git config user.email "ci-debug@users.noreply.github.com"
           git config user.name "ci-debug"
