@@ -178,76 +178,20 @@ jobs:
             exit 1
           }
 
-      # 诊断：Tauri build 失败时，把完整日志推送到 ci-debug-logs 分支（该分支不在
-      # on.push.branches 内，不会重新触发本 workflow；另含 [skip ci] 双保险）。
-      # 这样无 token 的本地环境也能用 `git fetch origin ci-debug-logs` 直接读到真实 cargo 报错。
-      # 以 BUILD_FAILED 标记或 stderr/stdout 内容为判断依据。
-      - name: Push build logs on failure
+      # 诊断：Tauri build 失败时，上传构建日志作为 artifact。
+      # 这样无 token 的本地环境也能从 run 页面下载日志查看真实错误。
+      - name: Upload build logs on failure
         if: ${{ always() }}
-        shell: pwsh
-        working-directory: ${{ github.workspace }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          Write-Host "=== LOG PUSH STEP STARTED ==="
-          $markerFile = "D:\wb\BUILD_FAILED"
-          $errFile = "D:\wb\tauri_stderr.log"
-          $outFile = "D:\wb\tauri_stdout.log"
-          $markerTxt = "D:\wb\BUILD_MARKER.txt"
-          Write-Host "Checking marker: $markerFile exists=$(Test-Path $markerFile)"
-          Write-Host "Checking stderr: $errFile exists=$(Test-Path $errFile)"
-          Write-Host "Checking stdout: $outFile exists=$(Test-Path $outFile)"
-          # 判断条件：有 BUILD_FAILED 标记，或 stderr/stdout 非空
-          $shouldPush = (Test-Path $markerFile) -or
-                        (-not [string]::IsNullOrWhiteSpace((Get-Content $errFile -Raw -ErrorAction SilentlyContinue))) -or
-                        (-not [string]::IsNullOrWhiteSpace((Get-Content $outFile -Raw -ErrorAction SilentlyContinue)))
-          Write-Host "shouldPush=$shouldPush"
-          if (-not $shouldPush) {
-            Write-Host "build likely succeeded (no marker, no stderr, no stdout) — skipping log push"
-            exit 0
-          }
-          Write-Host "Pushing logs to ci-debug-logs branch..."
-          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/mmllemon/deepseek-harness-desktop.git"
-          New-Item -ItemType Directory -Force -Path ci-debug | Out-Null
-          $maxLines = 4000
-          if (Test-Path $errFile) {
-            $lines = Get-Content $errFile -Tail $maxLines
-            $lines | Set-Content "ci-debug/tauri_stderr.log"
-            ($lines | Where-Object { $_ -match 'error' } | Select-Object -Last 300) -join "`n" | Set-Content "ci-debug/error-extract.txt"
-          } else {
-            "NO tauri_stderr.log found" | Set-Content "ci-debug/error-extract.txt"
-          }
-          if (Test-Path $outFile) {
-            (Get-Content $outFile -Tail 1500) | Set-Content "ci-debug/tauri_stdout.log"
-          }
-          if (Test-Path $markerTxt) {
-            Get-Content $markerTxt | Set-Content "ci-debug/BUILD_MARKER.txt"
-          }
-          # 检查是否有安装程序产物（帮助判断失败发生在哪一阶段）
-          $bundleDirs = @(
-            "D:\wb\src-tauri\target\release\bundle",
-            "D:\wb\src-tauri\target\x86_64-pc-windows-msvc\release\bundle"
-          )
-          $bundleInfo = @()
-          foreach ($d in $bundleDirs) {
-            if (Test-Path $d) {
-              $files = Get-ChildItem $d -Recurse -File | Select-Object -ExpandProperty FullName
-              $bundleInfo += "FOUND $d`: $($files -join ', ')"
-            }
-          }
-          if ($bundleInfo) {
-            $bundleInfo -join "`n" | Set-Content "ci-debug/bundle-info.txt"
-          } else {
-            "NO BUNDLE DIR FOUND" | Set-Content "ci-debug/bundle-info.txt"
-          }
-          git config user.email "ci-debug@users.noreply.github.com"
-          git config user.name "ci-debug"
-          git add ci-debug/
-          Write-Host "Committing debug logs..."
-          git commit -m "ci: debug build logs [skip ci]" || { Write-Error "git commit failed"; exit 1; }
-          Write-Host "Pushing to ci-debug-logs..."
-          git push origin HEAD:ci-debug-logs 2>&1 || { Write-Error "git push failed"; exit 1; }
-          Write-Host "=== LOG PUSH COMPLETED SUCCESSFULLY ==="
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-failed-${{ github.run_id }}
+          path: |
+            D:\wb\tauri_stdout.log
+            D:\wb\tauri_stderr.log
+            D:\wb\BUILD_FAILED
+            D:\wb\BUILD_MARKER.txt
+          retention-days: 5
+          if-no-files-found: ignore
 
       # ---- code signing (placeholder) ----
       # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
