@@ -166,7 +166,9 @@ jobs:
               $summary += $tail -replace "%0A", "`n"
               $summary += "`n`n`````"
               Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
-              Write-Output ("::error::TAURI BUILD FAILED (exit {0})%0A{1}" -f $code, $tail)
+              # 用双引号避免PowerShell解析问题
+              $errorMsg = "::error::TAURI BUILD FAILED (exit $code)%0A$tail"
+              Write-Output $errorMsg
               # 标记文件：供后续步骤判断。
               New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
               # 记录退出码，供诊断
