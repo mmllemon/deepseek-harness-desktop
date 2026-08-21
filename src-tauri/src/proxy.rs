@@ -173,13 +173,15 @@ async fn handler(
             };
 
             // 收集完整字节（注入脚本需要知道 </head> 位置）
+            // 注意：reqwest::Response::bytes() 会消费 resp（move），需先克隆 headers。
+            let upstream_headers = resp.headers().clone();
             let bytes = match resp.bytes().await {
                 Ok(b) => b,
                 Err(e) => return (StatusCode::BAD_GATEWAY, format!("read upstream body failed: {e}")).into_response(),
             };
 
             let mut builder = Response::builder().status(status);
-            for (k, v) in resp.headers() {
+            for (k, v) in &upstream_headers {
                 let kn = k.as_str();
                 if kn.eq_ignore_ascii_case("content-length")
                     || kn.eq_ignore_ascii_case("transfer-encoding")
