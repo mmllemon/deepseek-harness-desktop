@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   actions: write
 
 # Cancel any in-progress run for the same ref when a new one starts. Without this,
@@ -144,50 +144,9 @@ jobs:
             Write-Host "staged node sidecar: $dest ($([math]::Round((Get-Item $dest).Length/1MB,2)) MB)"
           }
 
-      # 诊断增强（临时）：把 Tauri 构建的完整输出落盘，并在失败时把错误尾部作为
-      # 单行 ::error:: 注解（用 %0A 表示换行，避免拆成多行丢失内容）回显，
-      # 同时写入 step summary，使无 token 的环境也能通过 run 页面读到真实报错。
       - name: Tauri build
         id: tauri
-        shell: pwsh
-        run: |
-          # 将构建脚本写入临时文件，避免 PowerShell 解析双引号字符串中的关键字
-          $script = @'
-          $p = Start-Process -NoNewWindow -FilePath "npm" -ArgumentList "run","tauri","build" `
-            -RedirectStandardOutput "D:\wb\tauri_stdout.log" -RedirectStandardError "D:\wb\tauri_stderr.log" -PassThru
-          $p.WaitForExit()
-          $code = $p.ExitCode
-          $out = Get-Content "D:\wb\tauri_stdout.log" -Raw -ErrorAction SilentlyContinue
-          $err = Get-Content "D:\wb\tauri_stderr.log" -Raw -ErrorAction SilentlyContinue
-          Write-Host "$out`n$err"
-          if ($code -ne 0) {
-            $tail = (($out + "`n" + $err) -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50
-            $summary = "## Build failed (exit $code)`n`n``````n" + ($tail -join "`n") + "`n`n`````"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
-            $msg = "::error::Tauri build exited with code $code"
-            Write-Host $msg
-            New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
-            "EXIT_CODE=$code" | Set-Content "D:\wb\BUILD_MARKER.txt" -Force
-          }
-          exit $code
-'@
-          $script | Set-Content "D:\wb\tauri-build.ps1" -Encoding UTF8
-          pwsh -File "D:\wb\tauri-build.ps1"
-
-      # 诊断：Tauri build 失败时，上传构建日志作为 artifact。
-      # 这样无 token 的本地环境也能从 run 页面下载日志查看真实错误。
-      - name: Upload build logs on failure
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-failed-${{ github.run_id }}
-          path: |
-            D:\wb\tauri_stdout.log
-            D:\wb\tauri_stderr.log
-            D:\wb\BUILD_FAILED
-            D:\wb\BUILD_MARKER.txt
-          retention-days: 5
-          if-no-files-found: ignore
+        run: npm run tauri build
 
       # ---- code signing (placeholder) ----
       # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
