@@ -19,7 +19,7 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
-use futures_util::{SinkExt, StreamExt, TryStreamExt};
+use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as TMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
