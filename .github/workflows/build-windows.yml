@@ -151,35 +151,28 @@ jobs:
         id: tauri
         shell: pwsh
         run: |
-          try {
-            $p = Start-Process -NoNewWindow -FilePath "npm" -ArgumentList "run","tauri","build" `
-              -RedirectStandardOutput "D:\wb\tauri_stdout.log" -RedirectStandardError "D:\wb\tauri_stderr.log" -PassThru
-            $p.WaitForExit()
-            $code = $p.ExitCode
-            $out = (Get-Content "D:\wb\tauri_stdout.log" -Raw -ErrorAction SilentlyContinue)
-            $err = (Get-Content "D:\wb\tauri_stderr.log" -Raw -ErrorAction SilentlyContinue)
-            $log = "$out`n$err"
-            Write-Host $log
-            if ($code -ne 0) {
-              # 截取错误尾部
-              $tail = (($log -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50) -join "`n"
-              # 把错误尾部写入 step summary
-              $summary = "## Tauri build failed (exit $code)`n`n``````n$tail`n`n`````"
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
-              # 输出错误信息到 GitHub 注解（使用 Write-Host 避免 PowerShell 关键字解析问题）
-              Write-Host "::error::TAURI BUILD FAILED (exit $code)"
-              # 标记文件
-              New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
-              # 记录退出码
-              "EXIT_CODE=$code`nSTDERR_LENGTH=$($err.Length)`nSTDOUT_LENGTH=$($out.Length)" | Set-Content "D:\wb\BUILD_MARKER.txt" -Force
-            }
-            exit $code
-          } catch {
-            Write-Host "::error::TAURI BUILD STEP ERROR: $_"
-            "TAURI BUILD STEP ERROR: $_" | Set-Content "D:\wb\tauri_stderr.log" -Force
+          # 将构建脚本写入临时文件，避免 PowerShell 解析双引号字符串中的关键字
+          $script = @'
+          $p = Start-Process -NoNewWindow -FilePath "npm" -ArgumentList "run","tauri","build" `
+            -RedirectStandardOutput "D:\wb\tauri_stdout.log" -RedirectStandardError "D:\wb\tauri_stderr.log" -PassThru
+          $p.WaitForExit()
+          $code = $p.ExitCode
+          $out = Get-Content "D:\wb\tauri_stdout.log" -Raw -ErrorAction SilentlyContinue
+          $err = Get-Content "D:\wb\tauri_stderr.log" -Raw -ErrorAction SilentlyContinue
+          Write-Host "$out`n$err"
+          if ($code -ne 0) {
+            $tail = (($out + "`n" + $err) -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50
+            $summary = "## Build failed (exit $code)`n`n``````n" + ($tail -join "`n") + "`n`n`````"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
+            $msg = "::error::Tauri build exited with code $code"
+            Write-Host $msg
             New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
-            exit 1
+            "EXIT_CODE=$code" | Set-Content "D:\wb\BUILD_MARKER.txt" -Force
           }
+          exit $code
+'@
+          $script | Set-Content "D:\wb\tauri-build.ps1" -Encoding UTF8
+          pwsh -File "D:\wb\tauri-build.ps1"
 
       # 诊断：Tauri build 失败时，上传构建日志作为 artifact。
       # 这样无 token 的本地环境也能从 run 页面下载日志查看真实错误。
