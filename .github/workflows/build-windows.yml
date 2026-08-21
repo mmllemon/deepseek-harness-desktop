@@ -189,18 +189,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          Write-Host "=== LOG PUSH STEP STARTED ==="
           $markerFile = "D:\wb\BUILD_FAILED"
           $errFile = "D:\wb\tauri_stderr.log"
           $outFile = "D:\wb\tauri_stdout.log"
           $markerTxt = "D:\wb\BUILD_MARKER.txt"
+          Write-Host "Checking marker: $markerFile exists=$(Test-Path $markerFile)"
+          Write-Host "Checking stderr: $errFile exists=$(Test-Path $errFile)"
+          Write-Host "Checking stdout: $outFile exists=$(Test-Path $outFile)"
           # 判断条件：有 BUILD_FAILED 标记，或 stderr/stdout 非空
           $shouldPush = (Test-Path $markerFile) -or
                         (-not [string]::IsNullOrWhiteSpace((Get-Content $errFile -Raw -ErrorAction SilentlyContinue))) -or
                         (-not [string]::IsNullOrWhiteSpace((Get-Content $outFile -Raw -ErrorAction SilentlyContinue)))
+          Write-Host "shouldPush=$shouldPush"
           if (-not $shouldPush) {
             Write-Host "build likely succeeded (no marker, no stderr, no stdout) — skipping log push"
             exit 0
           }
+          Write-Host "Pushing logs to ci-debug-logs branch..."
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/mmllemon/deepseek-harness-desktop.git"
           New-Item -ItemType Directory -Force -Path ci-debug | Out-Null
           $maxLines = 4000
@@ -237,8 +243,11 @@ jobs:
           git config user.email "ci-debug@users.noreply.github.com"
           git config user.name "ci-debug"
           git add ci-debug/
-          git commit -m "ci: debug build logs [skip ci]"
-          git push origin HEAD:ci-debug-logs
+          Write-Host "Committing debug logs..."
+          git commit -m "ci: debug build logs [skip ci]" || { Write-Error "git commit failed"; exit 1; }
+          Write-Host "Pushing to ci-debug-logs..."
+          git push origin HEAD:ci-debug-logs 2>&1 || { Write-Error "git push failed"; exit 1; }
+          Write-Host "=== LOG PUSH COMPLETED SUCCESSFULLY ==="
 
       # ---- code signing (placeholder) ----
       # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
