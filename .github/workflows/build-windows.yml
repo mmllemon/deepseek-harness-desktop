@@ -161,14 +161,13 @@ jobs:
             $log = "$out`n$err"
             Write-Host $log
             if ($code -ne 0) {
+              # 截取错误尾部
+              $tail = (($log -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50) -join "`n"
               # 把错误尾部写入step summary
-              $summary = "## Tauri build failed (exit $code)`n`n``````n"
-              $summary += $tail -replace "%0A", "`n"
-              $summary += "`n`n`````"
+              $summary = "## Tauri build failed (exit $code)`n`n``````n$tail`n`n`````"
               Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
-              # 用双引号避免PowerShell解析问题
-              $errorMsg = "::error::TAURI BUILD FAILED (exit $code)%0A$tail"
-              Write-Output $errorMsg
+              # 输出错误信息到GitHub注解
+              Write-Output "::error::TAURI BUILD FAILED (exit $code)"
               # 标记文件：供后续步骤判断。
               New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
               # 记录退出码，供诊断
