@@ -161,13 +161,15 @@ jobs:
             $log = "$out`n$err"
             Write-Host $log
             if ($code -ne 0) {
-              $tail = (($log -split "`n") | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 50) -join "%0A"
+              # 把错误尾部写入step summary
+              $summary = "## Tauri build failed (exit $code)`n`n``````n"
+              $summary += $tail -replace "%0A", "`n"
+              $summary += "`n`n`````"
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
               Write-Output ("::error::TAURI BUILD FAILED (exit {0})%0A{1}" -f $code, $tail)
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("## Tauri build failed (exit {0})`n`n``````n{1}`n`n`````" -f $code, ($tail -replace "%0A", "`n"))
-              # 标记文件：供后续 Push build logs 步骤判断。
-              # 注意：必须用 Windows 绝对路径 D:\wb\...，不能用 /d/wb/（PowerShell 会解析成 D:\d\wb\...）。
+              # 标记文件：供后续步骤判断。
               New-Item -ItemType File -Force -Path "D:\wb\BUILD_FAILED" | Out-Null
-              # 即使 stderr 为空也记录退出码，供诊断
+              # 记录退出码，供诊断
               "EXIT_CODE=$code`nSTDERR_LENGTH=$($err.Length)`nSTDOUT_LENGTH=$($out.Length)" | Set-Content "D:\wb\BUILD_MARKER.txt" -Force
             }
             exit $code
