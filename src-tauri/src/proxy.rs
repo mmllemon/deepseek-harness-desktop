@@ -13,6 +13,10 @@
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
+use tauri::Manager;
+
+use crate::config;
+use crate::state::AppState;
 use axum::extract::ws::{Message as AMessage, WebSocket as AWebSocket, WebSocketUpgrade};
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
@@ -29,17 +33,21 @@ pub struct ProxyState {
     pub token: String,
     /// 主题 id（来自 AppConfig.ui.theme），注入 HTML 时写入 localStorage
     pub theme: Option<String>,
+    /// Tauri app handle，用于把 SPA 上报的主题持久化到 config.json（AppConfig.ui.theme）
+    pub app: tauri::AppHandle,
 }
 
 /// 上游 WebSocket 流类型（明文字节，无 TLS）。
 type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// 启动反代，返回 (proxy_port, proxy_url)。proxy_url 含首次握手 token。
+/// `app`：用于把 SPA 上报的主题持久化到 config.json。
 /// `initial_theme`：AppConfig.ui.theme 的初始值，用于注入插件 localStorage。
-/// 传 None 则不注入（其他用户未安装主题插件时不影响行为）。
+/// 传 None 则仅注入「上报脚本」（仍捕获用户后续的主题选择），不预置初始主题。
 pub async fn start_proxy(
     agent_port: u16,
     token: String,
+    app: tauri::AppHandle,
     initial_theme: Option<String>,
 ) -> Result<(u16, String), String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -53,11 +61,13 @@ pub async fn start_proxy(
         agent_port,
         token: token.clone(),
         theme: initial_theme,
+        app,
     });
-    // 仅 WS 端点走专用隧道 handler；其余全部回退到通用 HTTP handler。
+    // 仅 WS 端点走专用隧道 handler；/__dsh_theme 接收前端主题上报；其余回退到通用 HTTP handler。
     let app = Router::new()
         .route("/api/events.mux", any(ws_handler))
         .route("/api/events.host", any(ws_handler))
+        .route("/__dsh_theme", any(theme_handler))
         .fallback(any(handler))
         .with_state(state);
 
@@ -150,8 +160,10 @@ async fn handler(
         Ok(resp) => {
             let status = resp.status();
 
-            // 主题注入：仅对 / 路径且响应为 text/html 时生效，写入插件的 localStorage key。
-            // 目的：解决 proxy 端口每次随机导致 origin 变化、localStorage 为空的问题。
+            // 主题注入：对 / 根路径且 text/html 的响应，注入「上报脚本」（始终）+「初始主题设置」（仅当已保存主题非空）。
+            // 上报脚本：拦截 localStorage.setItem 并轮询 dsh-angelina-themes.selection，
+            //   一旦 SPA（angelina-themes 插件）改动主题即 POST 到 /__dsh_theme，由后端持久化到 AppConfig.ui.theme。
+            // 目的：proxy 端口每次随机 → origin 变化 → localStorage 清空；靠后端记住主题，启动期注入还原。
             let inject_script = {
                 let is_root = uri.path() == "/";
                 let ct = resp
@@ -160,16 +172,17 @@ async fn handler(
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("")
                     .starts_with("text/html");
-                s.theme.as_ref().filter(|t| !t.is_empty()).and_then(|theme_id| {
-                    if is_root && ct {
-                        Some(format!(
-                            r#"<script>(function(l){{try{{l.setItem('dsh-angelina-themes.selection','{q}')}}catch(e){{}}}})(typeof localStorage!=='undefined'?localStorage:{{setItem:function(){{}}}})</script>"#,
-                            q = theme_id
-                        ))
-                    } else {
-                        None
-                    }
-                })
+                if is_root && ct {
+                    let theme_id = s.theme.as_ref().filter(|t| !t.is_empty());
+                    let set_part = match theme_id {
+                        Some(t) => format!("try{{localStorage.setItem(KEY,'{}')}}catch(e){{}}", t),
+                        None => String::new(),
+                    };
+                    let reporter = r#"<script>var KEY='dsh-angelina-themes.selection';function __dsh_report(v){try{fetch('/__dsh_theme',{method:'POST',body:''+v}).catch(function(){})}catch(e){}}var __dsh_s=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){__dsh_s.call(this,k,v);if(k===KEY)__dsh_report(v);};var __dsh_l=localStorage.getItem(KEY);setInterval(function(){var c=localStorage.getItem(KEY);if(c!==__dsh_l){__dsh_l=c;__dsh_report(c);}},1500);{set_part}</script>"#;
+                    Some(reporter.replace("{set_part}", &set_part))
+                } else {
+                    None
+                }
             };
 
             // 收集完整字节（注入脚本需要知道 </head> 位置）
@@ -215,6 +228,28 @@ async fn handler(
         }
         Err(e) => (StatusCode::BAD_GATEWAY, format!("upstream error: {e}")).into_response(),
     }
+}
+
+/// 接收 SPA（angelina-themes 插件）上报的当前主题，持久化到 AppConfig.ui.theme（config.json）。
+/// 浏览器在同源下带 dsh_token cookie，经 valid_token 校验后写入；与上游无关（不转发）。
+async fn theme_handler(
+    State(s): State<Arc<ProxyState>>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !valid_token(&s, &uri, &headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let theme = String::from_utf8_lossy(&body).trim().to_string();
+    let app = s.app.clone();
+    let mut cfg = app.state::<AppState>().config.lock().unwrap().clone();
+    if cfg.ui.theme != theme {
+        cfg.ui.theme = theme.clone();
+        let _ = config::save_config(&app, &cfg);
+        *app.state::<AppState>().config.lock().unwrap() = cfg;
+    }
+    (StatusCode::OK, "ok").into_response()
 }
 
 /// WebSocket 隧道 handler：接受浏览器升级，连上游并双向透传帧。
