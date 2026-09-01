@@ -77,6 +77,7 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     let mut cmd = Command::new(&node_bin);
     cmd.arg(&entry)
         .arg("web")
+        .arg("--no-open")
         .arg("--port")
         .arg(port.to_string())
         .envs(&env)
@@ -159,10 +160,16 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
                     && line.contains(&format!(":{port}"))
                 {
                     ready.store(true, Ordering::SeqCst);
+                    // 提取上游 harness launch token（alpha.3+ 新增鉴权所需，用于换取签名 cookie）
+                    let agent_tok = extract_agent_token(&line);
+                    if let Some(ref at) = agent_tok {
+                        let st = app_out.state::<AppState>();
+                        st.inner.lock().unwrap().agent_token = Some(at.clone());
+                    }
                     let a = app_out.clone();
                     let t = tok_out.clone();
                     tauri::async_runtime::spawn(async move {
-                        on_ready(&a, port, &t).await;
+                        on_ready(&a, port, &t, agent_tok).await;
                     });
                 }
             }
@@ -201,16 +208,12 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
         for _ in 0..40 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             if tcp_connect("127.0.0.1", port) {
-                let already = {
-                    app3.state::<AppState>()
-                        .inner
-                        .lock()
-                        .unwrap()
-                        .proxy_url
-                        .is_some()
+                let (already, agent_tok) = {
+                    let inner = app3.state::<AppState>().inner.lock().unwrap();
+                    (inner.proxy_url.is_some(), inner.agent_token.clone())
                 };
                 if !already {
-                    on_ready(&app3, port, &token3).await;
+                    on_ready(&app3, port, &token3, agent_tok).await;
                 }
                 break;
             }
@@ -221,7 +224,7 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
 }
 
 /// 反代启动成功后的统一回调：拉起 axum 反代 + 通知前端加载 proxyUrl。
-async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str) {
+async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str, agent_token: Option<String>) {
     // 幂等：仅首次生效
     {
         let state = app.state::<AppState>();
@@ -238,6 +241,7 @@ async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str) {
             let cfg = app.state::<AppState>().config.lock().unwrap().clone();
             if cfg.ui.theme.is_empty() { None } else { Some(cfg.ui.theme) }
         },
+        agent_token,
     ).await {
         Ok((proxy_port, proxy_url)) => {
             let state = app.state::<AppState>();
@@ -417,4 +421,17 @@ fn tcp_connect(host: &str, port: u16) -> bool {
         Ok(addr) => std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok(),
         Err(_) => false,
     }
+}
+
+/// 从 `dsh web:` 启动行提取 harness launch token（alpha.3+ 鉴权所需）。
+/// 形如 `dsh web: http://127.0.0.1:PORT/?token=<43-char>&...` 或带 `(LAN: ...)` 后缀。
+/// 返回 `?token=` 之后的纯 token 串（不含后续 `&` / 空白 / 括号）。
+fn extract_agent_token(line: &str) -> Option<String> {
+    let idx = line.find("token=")?;
+    let rest = &line[idx + "token=".len()..];
+    let end = rest
+        .find(|c: char| c == '&' || c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ')' || c == '"' || c == '\'')
+        .unwrap_or(rest.len());
+    let tok = &rest[..end];
+    if tok.is_empty() { None } else { Some(tok.to_string()) }
 }
