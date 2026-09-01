@@ -25,6 +25,11 @@ $ErrorActionPreference = "Stop"
 
 $results = @()
 
+# alpha.3+ 上游 harness 强制浏览器会话鉴权：launch URL 形如
+# `http://127.0.0.1:<port>/?token=<43-char>`，GET 它换取签名 Set-Cookie。
+# 若 harness 未注入 token（旧版本），则为 $null，gate (c) 退化为直接 curl。
+$launchToken = $null
+
 function Record($name, $ok, $detail, $gate = $true) {
     if ($ok) { Write-Host "PASS  $name : $detail" }
     else     { Write-Host "FAIL  $name : $detail" }
@@ -91,6 +96,13 @@ setTimeout(() => {
         }
         if (Test-Path $outFile) {
             $log = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
+            # 捕获 alpha.3+ 的 launch token（?token= 之后的 base64 串），供 gate (c) 换取 cookie
+            if ($log -match ("http://127\.0\.0\.1:" + [regex]::Escape($port) + "/\?token=([A-Za-z0-9_\-]+)")) {
+                $ready = $true
+                $script:launchToken = $matches[1]
+                break
+            }
+            # 旧版本（无 token 注入）：仅匹配 host:port 即算就绪
             if ($log -match ("http://127.0.0.1:" + [regex]::Escape($port))) {
                 $ready = $true
                 break
@@ -105,12 +117,23 @@ setTimeout(() => {
     }
 
     # (c) curl returns HTML
+    # alpha.3+ 强制浏览器会话鉴权：裸端口 GET / 直接 401，必须先 GET launch URL 换取签名 cookie。
+    # 流程：① curl -c jar GET /?token=<launchToken> → 303 + Set-Cookie；② curl -b jar GET / → 200 + HTML。
     $bodyFile = Join-Path $env:TEMP ("dsh-smoke-" + [guid]::NewGuid().ToString("N") + ".html")
-    $code = & curl.exe -s -o $bodyFile -w "%{http_code}" "http://127.0.0.1:$port"
+    $cookieJar = Join-Path $env:TEMP ("dsh-smoke-" + [guid]::NewGuid().ToString("N") + ".ck.txt")
+    if ($launchToken) {
+        $launchCode = & curl.exe -s -o nul -c $cookieJar -w "%{http_code}" "http://127.0.0.1:$port/?token=$launchToken"
+        $code = & curl.exe -s -b $cookieJar -o $bodyFile -w "%{http_code}" "http://127.0.0.1:$port"
+        $detail = "http_code=$code; launch_code=$launchCode"
+    } else {
+        # 旧版本（无 launch token 注入）：直接访问。
+        $code = & curl.exe -s -o $bodyFile -w "%{http_code}" "http://127.0.0.1:$port"
+        $detail = "http_code=$code"
+    }
     $body = if (Test-Path $bodyFile) { Get-Content $bodyFile -Raw -ErrorAction SilentlyContinue } else { "" }
     $isHtml = ($code -eq "200") -and ($body -match "(?i)<!doctype|<html|<body")
-    Record "(c) curl returns HTML" $isHtml "http_code=$code"
-    if (-not $isHtml) { throw "Gate (c) failed. http_code=$code" }
+    Record "(c) curl returns HTML" $isHtml $detail
+    if (-not $isHtml) { throw "Gate (c) failed. $detail" }
 
     # (d) optional API reachability probe — INFORMATIONAL ONLY, never gates the result
     if ($env:DEEPSEEK_API_KEY) {
