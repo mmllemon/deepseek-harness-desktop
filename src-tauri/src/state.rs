@@ -102,7 +102,10 @@ pub struct ChildHandle {
 /// 运行期内核状态。
 pub struct InnerState {
     pub child: Option<ChildHandle>,
+    /// 反代自身鉴权 token（注入 proxy_url 的 ?t=）
     pub token: Option<String>,
+    /// 上游 harness 的 launch token（来自 ready 行 `?token=`，用于换取签名 cookie）
+    pub agent_token: Option<String>,
     pub proxy_port: Option<u16>,
     pub proxy_url: Option<String>,
     pub agent_port: Option<u16>,
@@ -115,6 +118,7 @@ impl Default for InnerState {
         Self {
             child: None,
             token: None,
+            agent_token: None,
             proxy_port: None,
             proxy_url: None,
             agent_port: None,
