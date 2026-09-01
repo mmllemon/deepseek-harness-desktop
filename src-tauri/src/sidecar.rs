@@ -238,7 +238,10 @@ async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str, agent_to
     // 避免 TCP 回退路径在 stdout 解析出 token 之前就触发 on_ready 而传入空快照
     // （那会导致代理以空 token 启动、cookie 永远 harvest 不到 → 502）。
     let live = {
-        let inner = app.state::<AppState>().inner.lock().unwrap();
+        // 必须先把 app.state::<AppState>() 绑定到 let，否则临时 State 值在语句末尾释放，
+        // 而 .inner.lock() 返回的 MutexGuard 仍借用它，触发 E0716（同文件 230-235 行的写法）。
+        let state = app.state::<AppState>();
+        let inner = state.inner.lock().unwrap();
         inner.agent_token.clone()
     };
     let agent_token = agent_token.or(live);
