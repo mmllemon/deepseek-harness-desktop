@@ -234,6 +234,14 @@ async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str, agent_to
             return;
         }
     }
+    // 修复（2026-09-01）：优先用传入 token，为空则取 AppState「实时」agent_token，
+    // 避免 TCP 回退路径在 stdout 解析出 token 之前就触发 on_ready 而传入空快照
+    // （那会导致代理以空 token 启动、cookie 永远 harvest 不到 → 502）。
+    let live = {
+        let inner = app.state::<AppState>().inner.lock().unwrap();
+        inner.agent_token.clone()
+    };
+    let agent_token = agent_token.or(live);
     match proxy::start_proxy(
         agent_port,
         token.to_string(),

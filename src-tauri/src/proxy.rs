@@ -69,7 +69,19 @@ pub async fn start_proxy(
 
     // 与上游 harness 完成 token 交换，harvest 签名会话 cookie（alpha.3+ 强制鉴权）。
     // 交换失败（如 harness 尚未就绪）时回退到惰性握手：首个请求到达时再尝试一次。
-    let agent_token = agent_token.unwrap_or_default();
+    // 修复（2026-09-01）：优先使用调用方传入的 token，若为空则回退到 AppState 中
+    // 「实时」的 agent_token——TCP 回退路径可能在 stdout 解析出 token 之前就触发 on_ready，
+    // 此时传入的快照为空，必须用最新值，否则代理将以空 token 永久运行 → 502。
+    let passed = agent_token.unwrap_or_default();
+    let live = app
+        .state::<AppState>()
+        .inner
+        .lock()
+        .unwrap()
+        .agent_token
+        .clone()
+        .unwrap_or_default();
+    let agent_token = if passed.is_empty() { live } else { passed };
     if !agent_token.is_empty() {
         if let Some(c) = handshake_cookie(agent_port, &agent_token).await {
             *agent_cookie.lock().unwrap() = Some(c);
@@ -133,10 +145,26 @@ async fn handshake_cookie(agent_port: u16, agent_token: &str) -> Option<String> 
 }
 
 /// 惰性握手：若尚无 cookie，则尝试换取一次（用于启动时交换失败的场景）。
+/// 修复（2026-09-01）：token 一律从 AppState 读取「实时」值，而非 ProxyState 启动时的
+/// 快照——stdout 解析可能在代理启动后才写入 agent_token，用快照会永远拿不到 cookie。
 async fn ensure_cookie(s: &Arc<ProxyState>) {
+    let live = s
+        .app
+        .state::<AppState>()
+        .inner
+        .lock()
+        .unwrap()
+        .agent_token
+        .clone()
+        .unwrap_or_default();
+    let tok = if live.is_empty() {
+        s.agent_token.clone()
+    } else {
+        live
+    };
     let has = s.agent_cookie.lock().unwrap().is_some();
-    if !has && !s.agent_token.is_empty() {
-        if let Some(c) = handshake_cookie(s.agent_port, &s.agent_token).await {
+    if !has && !tok.is_empty() {
+        if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
             *s.agent_cookie.lock().unwrap() = Some(c);
         }
     }
@@ -189,6 +217,17 @@ async fn handler(
 
     // 附加上游 harness 鉴权 cookie（alpha.3+ 强制）：惰性握手兜底
     ensure_cookie(&s).await;
+    // 有界重试（2026-09-01）：首个请求可能抢在 stdout token 解析完成前到达
+    // （TCP 回退路径先触发 on_ready 时 token 仍空）。此处等待 token 落盘后重试握手，
+    // 最多约 3.2s，避免一次性 502 误伤首次加载。
+    for _ in 0..8 {
+        let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
+        if !cookie.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        ensure_cookie(&s).await;
+    }
     let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
     if cookie.is_empty() {
         return (StatusCode::BAD_GATEWAY, "harness auth cookie unavailable").into_response();
@@ -204,15 +243,31 @@ async fn handler(
     };
     let status = resp.status();
 
-    // 401 = 会话 cookie 过期或被拒：重新握手一次后重试
+    // 401 = 会话 cookie 过期或被拒：重新握手一次后重试（同样使用实时 token）
     if status == StatusCode::UNAUTHORIZED {
-        if let Some(c) = handshake_cookie(s.agent_port, &s.agent_token).await {
-            *s.agent_cookie.lock().unwrap() = Some(c.clone());
-            let retry = match forward_upstream(&s, method, &uri, &headers, body, &c).await {
-                Ok(r) => r,
-                Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
-            };
-            return transform_upstream(retry, &theme, set_cookie.as_deref(), is_root).await;
+        let live = s
+            .app
+            .state::<AppState>()
+            .inner
+            .lock()
+            .unwrap()
+            .agent_token
+            .clone()
+            .unwrap_or_default();
+        let tok = if live.is_empty() {
+            s.agent_token.clone()
+        } else {
+            live
+        };
+        if !tok.is_empty() {
+            if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
+                *s.agent_cookie.lock().unwrap() = Some(c.clone());
+                let retry = match forward_upstream(&s, method, &uri, &headers, body, &c).await {
+                    Ok(r) => r,
+                    Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+                };
+                return transform_upstream(retry, &theme, set_cookie.as_deref(), is_root).await;
+            }
         }
         return (StatusCode::UNAUTHORIZED, "harness auth required").into_response();
     }
