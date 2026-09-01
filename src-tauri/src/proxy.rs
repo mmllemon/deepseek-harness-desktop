@@ -11,6 +11,8 @@
 //! 用 axum 接受浏览器升级，用 tokio-tungstenite 连上游，双向透传帧。
 
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use tauri::Manager;
@@ -19,7 +21,7 @@ use crate::config;
 use crate::state::AppState;
 use axum::extract::ws::{Message as AMessage, WebSocket as AWebSocket, WebSocketUpgrade};
 use axum::extract::{OriginalUri, State};
-use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
@@ -35,6 +37,10 @@ pub struct ProxyState {
     pub theme: Option<String>,
     /// Tauri app handle，用于把 SPA 上报的主题持久化到 config.json（AppConfig.ui.theme）
     pub app: tauri::AppHandle,
+    /// 上游 harness 的 launch token（来自 ready 行 `?token=`），用于换取签名 cookie
+    pub agent_token: String,
+    /// 与上游 harness 完成 token 交换后 Harvest 的会话 cookie（`name=value`，已剥离属性）
+    pub agent_cookie: Arc<Mutex<Option<String>>>,
 }
 
 /// 上游 WebSocket 流类型（明文字节，无 TLS）。
@@ -44,11 +50,13 @@ type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// `app`：用于把 SPA 上报的主题持久化到 config.json。
 /// `initial_theme`：AppConfig.ui.theme 的初始值，用于注入插件 localStorage。
 /// 传 None 则仅注入「上报脚本」（仍捕获用户后续的主题选择），不预置初始主题。
+/// `agent_token`：上游 harness 的 launch token（alpha.3+ 鉴权所需），用于换取会话 cookie。
 pub async fn start_proxy(
     agent_port: u16,
     token: String,
     app: tauri::AppHandle,
     initial_theme: Option<String>,
+    agent_token: Option<String>,
 ) -> Result<(u16, String), String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -57,11 +65,24 @@ pub async fn start_proxy(
         .local_addr()
         .map_err(|e| e.to_string())?
         .port();
+    let agent_cookie: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    // 与上游 harness 完成 token 交换，harvest 签名会话 cookie（alpha.3+ 强制鉴权）。
+    // 交换失败（如 harness 尚未就绪）时回退到惰性握手：首个请求到达时再尝试一次。
+    let agent_token = agent_token.unwrap_or_default();
+    if !agent_token.is_empty() {
+        if let Some(c) = handshake_cookie(agent_port, &agent_token).await {
+            *agent_cookie.lock().unwrap() = Some(c);
+        }
+    }
+
     let state = Arc::new(ProxyState {
         agent_port,
         token: token.clone(),
         theme: initial_theme,
         app,
+        agent_token,
+        agent_cookie,
     });
     // 仅 WS 端点走专用隧道 handler；/__dsh_theme 接收前端主题上报；其余回退到通用 HTTP handler。
     let app = Router::new()
@@ -79,6 +100,46 @@ pub async fn start_proxy(
 
     let proxy_url = format!("http://127.0.0.1:{}/?t={}", proxy_port, token);
     Ok((proxy_port, proxy_url))
+}
+
+/// 向上游 harness 发起一次 launch-token 交换，返回 `name=value` 形式的会话 cookie。
+/// harness 在 `GET /?token=<launchToken>` 时返回 303 + Set-Cookie（HttpOnly, SameSite=Strict）。
+/// 该 cookie 由 harness 用 `$DSH_HOME/.credentials.yaml` 中的密钥签名，桌面无法伪造，必须换取。
+/// cookie 名 = `dsh-auth-` + base64url(sha256(Host))，因此请求 Host 必须与交换时一致（127.0.0.1:<port>）。
+async fn handshake_cookie(agent_port: u16, agent_token: &str) -> Option<String> {
+    if agent_token.is_empty() {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()?;
+    let url = format!("http://127.0.0.1:{}/?token={}", agent_port, agent_token);
+    for _ in 0..20 {
+        if let Ok(resp) = client.get(&url).send().await {
+            if let Some(sc) = resp.headers().get(reqwest::header::SET_COOKIE) {
+                if let Ok(s) = sc.to_str() {
+                    // 仅取首个 name=value 对（剥离 Max-Age/Path/Expires/HttpOnly/SameSite 等响应属性）
+                    let pair = s.split(';').next().unwrap_or("").trim().to_string();
+                    if !pair.is_empty() {
+                        return Some(pair);
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    None
+}
+
+/// 惰性握手：若尚无 cookie，则尝试换取一次（用于启动时交换失败的场景）。
+async fn ensure_cookie(s: &Arc<ProxyState>) {
+    let has = s.agent_cookie.lock().unwrap().is_some();
+    if !has && !s.agent_token.is_empty() {
+        if let Some(c) = handshake_cookie(s.agent_port, &s.agent_token).await {
+            *s.agent_cookie.lock().unwrap() = Some(c);
+        }
+    }
 }
 
 /// 校验请求携带的 token（cookie `dsh_token` 或首次 query `t`）。
@@ -126,12 +187,51 @@ async fn handler(
         }
     }
 
-    let path_and_query = uri
-        .path_and_query()
-        .map(|x| x.as_str())
-        .unwrap_or("/");
-    let upstream = format!("http://127.0.0.1:{}{}", s.agent_port, path_and_query);
+    // 附加上游 harness 鉴权 cookie（alpha.3+ 强制）：惰性握手兜底
+    ensure_cookie(&s).await;
+    let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
+    if cookie.is_empty() {
+        return (StatusCode::BAD_GATEWAY, "harness auth cookie unavailable").into_response();
+    }
 
+    let is_root = uri.path() == "/";
+    let theme = s.theme.clone();
+
+    // 首次转发
+    let resp = match forward_upstream(&s, method.clone(), &uri, &headers, body.clone(), &cookie).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+    };
+    let status = resp.status();
+
+    // 401 = 会话 cookie 过期或被拒：重新握手一次后重试
+    if status == StatusCode::UNAUTHORIZED {
+        if let Some(c) = handshake_cookie(s.agent_port, &s.agent_token).await {
+            *s.agent_cookie.lock().unwrap() = Some(c.clone());
+            let retry = match forward_upstream(&s, method, &uri, &headers, body, &c).await {
+                Ok(r) => r,
+                Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+            };
+            return transform_upstream(retry, &theme, set_cookie.as_deref(), is_root).await;
+        }
+        return (StatusCode::UNAUTHORIZED, "harness auth required").into_response();
+    }
+
+    transform_upstream(resp, &theme, set_cookie.as_deref(), is_root).await
+}
+
+/// 向上游 harness 转发一次请求，附上已 harvest 的会话 cookie（alpha.3+ 鉴权必需）。
+/// 上游 Host 由 reqwest 按 URL 自动设为 `127.0.0.1:<agent_port>`，与 cookie 绑定的 authority 一致。
+async fn forward_upstream(
+    s: &Arc<ProxyState>,
+    method: Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: Bytes,
+    cookie: &str,
+) -> Result<reqwest::Response, String> {
+    let path_and_query = uri.path_and_query().map(|x| x.as_str()).unwrap_or("/");
+    let upstream = format!("http://127.0.0.1:{}{}", s.agent_port, path_and_query);
     let client = reqwest::Client::new();
     let m = match method {
         Method::GET => reqwest::Method::GET,
@@ -154,80 +254,89 @@ async fn handler(
         }
         rb = rb.header(kn, v);
     }
+    rb = rb.header("cookie", cookie);
     rb = rb.body(body);
-
     match rb.send().await {
-        Ok(resp) => {
-            let status = resp.status();
-
-            // 主题注入：对 / 根路径且 text/html 的响应，注入「上报脚本」（始终）+「初始主题设置」（仅当已保存主题非空）。
-            // 上报脚本：拦截 localStorage.setItem 并轮询 dsh-angelina-themes.selection，
-            //   一旦 SPA（angelina-themes 插件）改动主题即 POST 到 /__dsh_theme，由后端持久化到 AppConfig.ui.theme。
-            // 目的：proxy 端口每次随机 → origin 变化 → localStorage 清空；靠后端记住主题，启动期注入还原。
-            let inject_script = {
-                let is_root = uri.path() == "/";
-                let ct = resp
-                    .headers()
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .starts_with("text/html");
-                if is_root && ct {
-                    let theme_id = s.theme.as_ref().filter(|t| !t.is_empty());
-                    let set_part = match theme_id {
-                        Some(t) => format!("try{{localStorage.setItem(KEY,'{}')}}catch(e){{}}", t),
-                        None => String::new(),
-                    };
-                    let reporter = r#"<script>var KEY='dsh-angelina-themes.selection';function __dsh_report(v){try{fetch('/__dsh_theme',{method:'POST',body:''+v}).catch(function(){})}catch(e){}}var __dsh_s=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){__dsh_s.call(this,k,v);if(k===KEY)__dsh_report(v);};var __dsh_l=localStorage.getItem(KEY);setInterval(function(){var c=localStorage.getItem(KEY);if(c!==__dsh_l){__dsh_l=c;__dsh_report(c);}},1500);{set_part}</script>"#;
-                    Some(reporter.replace("{set_part}", &set_part))
-                } else {
-                    None
-                }
-            };
-
-            // 收集完整字节（注入脚本需要知道 </head> 位置）
-            // 注意：reqwest::Response::bytes() 会消费 resp（move），需先克隆 headers。
-            let upstream_headers = resp.headers().clone();
-            let bytes = match resp.bytes().await {
-                Ok(b) => b,
-                Err(e) => return (StatusCode::BAD_GATEWAY, format!("read upstream body failed: {e}")).into_response(),
-            };
-
-            let mut builder = Response::builder().status(status);
-            for (k, v) in &upstream_headers {
-                let kn = k.as_str();
-                if kn.eq_ignore_ascii_case("content-length")
-                    || kn.eq_ignore_ascii_case("transfer-encoding")
-                    || kn.eq_ignore_ascii_case("connection")
-                {
-                    continue;
-                }
-                builder = builder.header(kn, v);
-            }
-            if let Some(c) = &set_cookie {
-                builder = builder.header("set-cookie", c);
-            }
-
-            let body = if let Some(script) = &inject_script {
-                let modified = if let Some(pos) = bytes.windows(7).position(|w| w == b"</head>") {
-                    let mut out = bytes[..pos + 7].to_vec();
-                    out.extend_from_slice(script.as_bytes());
-                    out.extend_from_slice(&bytes[pos + 7..]);
-                    out
-                } else {
-                    let mut out = bytes.to_vec();
-                    out.extend_from_slice(script.as_bytes());
-                    out
-                };
-                Body::from(modified)
-            } else {
-                Body::from(bytes)
-            };
-
-            builder.body(body).unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "build response failed").into_response())
-        }
-        Err(e) => (StatusCode::BAD_GATEWAY, format!("upstream error: {e}")).into_response(),
+        Ok(resp) => Ok(resp),
+        Err(e) => Err(format!("upstream error: {e}")),
     }
+}
+
+/// 把上游响应转回 axum Response，并对 / 根路径的 HTML 注入主题脚本。
+async fn transform_upstream(
+    resp: reqwest::Response,
+    theme: &Option<String>,
+    set_cookie: Option<&str>,
+    is_root: bool,
+) -> Response {
+    let status = resp.status();
+
+    // 主题注入：对 / 根路径且 text/html 的响应，注入「上报脚本」（始终）+「初始主题设置」（仅当已保存主题非空）。
+    // 上报脚本：拦截 localStorage.setItem 并轮询 dsh-angelina-themes.selection，
+    //   一旦 SPA（angelina-themes 插件）改动主题即 POST 到 /__dsh_theme，由后端持久化到 AppConfig.ui.theme。
+    // 目的：proxy 端口每次随机 → origin 变化 → localStorage 清空；靠后端记住主题，启动期注入还原。
+    let inject_script = if is_root {
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .starts_with("text/html");
+        if ct {
+            let theme_id = theme.as_ref().filter(|t| !t.is_empty());
+            let set_part = match theme_id {
+                Some(t) => format!("try{{localStorage.setItem(KEY,'{}')}}catch(e){{}}", t),
+                None => String::new(),
+            };
+            let reporter = r#"<script>var KEY='dsh-angelina-themes.selection';function __dsh_report(v){try{fetch('/__dsh_theme',{method:'POST',body:''+v}).catch(function(){})}catch(e){}}var __dsh_s=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){__dsh_s.call(this,k,v);if(k===KEY)__dsh_report(v);};var __dsh_l=localStorage.getItem(KEY);setInterval(function(){var c=localStorage.getItem(KEY);if(c!==__dsh_l){__dsh_l=c;__dsh_report(c);}},1500);{set_part}</script>"#;
+            Some(reporter.replace("{set_part}", &set_part))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // 收集完整字节（注入脚本需要知道 </head> 位置）
+    // 注意：reqwest::Response::bytes() 会消费 resp（move），需先克隆 headers。
+    let upstream_headers = resp.headers().clone();
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("read upstream body failed: {e}")).into_response(),
+    };
+
+    let mut builder = Response::builder().status(status);
+    for (k, v) in &upstream_headers {
+        let kn = k.as_str();
+        if kn.eq_ignore_ascii_case("content-length")
+            || kn.eq_ignore_ascii_case("transfer-encoding")
+            || kn.eq_ignore_ascii_case("connection")
+        {
+            continue;
+        }
+        builder = builder.header(kn, v);
+    }
+    if let Some(c) = set_cookie {
+        builder = builder.header("set-cookie", c);
+    }
+
+    let body = if let Some(script) = &inject_script {
+        let modified = if let Some(pos) = bytes.windows(7).position(|w| w == b"</head>") {
+            let mut out = bytes[..pos + 7].to_vec();
+            out.extend_from_slice(script.as_bytes());
+            out.extend_from_slice(&bytes[pos + 7..]);
+            out
+        } else {
+            let mut out = bytes.to_vec();
+            out.extend_from_slice(script.as_bytes());
+            out
+        };
+        Body::from(modified)
+    } else {
+        Body::from(bytes)
+    };
+
+    builder.body(body).unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "build response failed").into_response())
 }
 
 /// 接收 SPA（angelina-themes 插件）上报的当前主题，持久化到 AppConfig.ui.theme（config.json）。
@@ -280,11 +389,33 @@ async fn ws_handler(
     let upstream = format!("ws://127.0.0.1:{}{}", s.agent_port, pq);
 
     ws.on_upgrade(move |client_ws| async move {
-        match tokio_tungstenite::connect_async(upstream.as_str()).await {
-            Ok((upstream_ws, _)) => pipe(client_ws, upstream_ws).await,
-            // 上游连不上：client_ws 出作用域自动关闭，浏览器会按自身重连逻辑重试。
-            Err(e) => {
-                eprintln!("proxy ws upstream connect failed: {e}");
+        // alpha.3+ 强制鉴权：WS 升级同样是一次 HTTP 请求，需带上 harvest 的会话 cookie。
+        // 惰性兜底：若 HTTP handler 尚未完成握手（cookie 缺失），在此再尝试一次。
+        if s.agent_cookie.lock().unwrap().is_none() && !s.agent_token.is_empty() {
+            if let Some(c) = handshake_cookie(s.agent_port, &s.agent_token).await {
+                *s.agent_cookie.lock().unwrap() = Some(c);
+            }
+        }
+        let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
+
+        // 构造带 cookie 的升级请求（Host 由 tungstenite 按 URL 自动设为 127.0.0.1:<agent_port>，
+        // 与 cookie 绑定的 authority 一致）。
+        let req = Request::builder()
+            .uri(upstream.as_str())
+            .header("cookie", cookie)
+            .body(())
+            .ok();
+
+        match req {
+            Some(req) => match tokio_tungstenite::connect_async(req).await {
+                Ok((upstream_ws, _)) => pipe(client_ws, upstream_ws).await,
+                // 上游连不上：client_ws 出作用域自动关闭，浏览器会按自身重连逻辑重试。
+                Err(e) => {
+                    eprintln!("proxy ws upstream connect failed: {e}");
+                }
+            },
+            None => {
+                eprintln!("proxy ws: failed to build upgrade request");
             }
         }
     })
