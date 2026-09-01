@@ -209,7 +209,8 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
             tokio::time::sleep(Duration::from_millis(500)).await;
             if tcp_connect("127.0.0.1", port) {
                 let (already, agent_tok) = {
-                    let inner = app3.state::<AppState>().inner.lock().unwrap();
+                    let st = app3.state::<AppState>();
+                    let inner = st.inner.lock().unwrap();
                     (inner.proxy_url.is_some(), inner.agent_token.clone())
                 };
                 if !already {
