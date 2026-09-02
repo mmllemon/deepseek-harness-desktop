@@ -4,11 +4,19 @@
 //! 拦截 DNS 重绑定，将请求转发给仅监听 loopback 的 `dsh` 后端。随机端口≠认证，
 //! token 才是真实认证边界；dsh 裸端口无法关闭，反代仅加固本机任意进程直连面。
 //!
-//! 关键修复（2026-08-19）：此前代理仅用 reqwest 做 HTTP 转发，对
-//! `/api/events.mux`、`/api/events.host` 这类 WebSocket 升级请求无能为力——
-//! reqwest 无法隧道化双向 WS，导致 SPA 的实时事件流（用户消息 / AI 回复）
-//! 被缓冲或丢弃，UI 要等 ~20s 才显示。现对这两个端点做真正的 WS 隧道：
-//! 用 axum 接受浏览器升级，用 tokio-tungstenite 连上游，双向透传帧。
+//! 关键修复（2026-08-19）：此前代理仅用 reqwest 做 HTTP 转发，对 WebSocket 升级请求无能为力——
+//! reqwest 无法隧道化双向 WS，导致 SPA 的实时事件流（用户消息 / AI 回复）被缓冲或丢弃，
+//! UI 要等 ~20s 才显示。现对 WS 端点做真正的隧道：axum 接受浏览器升级，
+//! tokio-tungstenite 连上游，双向透传帧。
+//!
+//! 关键修复（2026-09-02）：WS 端点名在 harness 各版本间漂移过——
+//! 早期为 `/api/events.mux` / `/api/events.host`，alpha.3 起统一为 `/api/remote.mux`
+//! （证据：运行时下发的插件 combo bundle 中仅出现 `/api/remote.mux`；直连 sidecar 时
+//! `/api/remote.mux` 返回 401 鉴权响应，而 `events.*` 与任意伪造路径均 `socket hang up`，
+//! 即 webserver 的 upgrade 路由表中不存在）。代理若仍只注册旧名，SPA 的升级请求会落到
+//! HTTP fallback（reqwest）→ 无法完成 101 握手 → 浏览器 WS 以 1006 关闭 → UI 永久
+//! "连接中…" + "正在加载模型…"。
+//! 对策：路由侧同时注册三代端点名，上游侧按候选列表依次尝试，取首个握手成功者。
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -45,6 +53,10 @@ pub struct ProxyState {
 
 /// 上游 WebSocket 流类型（明文字节，无 TLS）。
 type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// 各版本 harness 曾用/现用的 WS 升级端点名，按「当前版本优先」排列。
+/// 路由侧全部注册；上游侧按此顺序做候选回退，取首个握手成功者。
+const WS_ROUTES: [&str; 3] = ["/api/remote.mux", "/api/events.mux", "/api/events.host"];
 
 /// 启动反代，返回 (proxy_port, proxy_url)。proxy_url 含首次握手 token。
 /// `app`：用于把 SPA 上报的主题持久化到 config.json。
@@ -96,13 +108,13 @@ pub async fn start_proxy(
         agent_token,
         agent_cookie,
     });
-    // 仅 WS 端点走专用隧道 handler；/__dsh_theme 接收前端主题上报；其余回退到通用 HTTP handler。
-    let app = Router::new()
-        .route("/api/events.mux", any(ws_handler))
-        .route("/api/events.host", any(ws_handler))
-        .route("/__dsh_theme", any(theme_handler))
-        .fallback(any(handler))
-        .with_state(state);
+    // 仅 WS 端点走专用隧道 handler（三代端点名全注册，避免上游改名后再次失配）；
+    // /__dsh_theme 接收前端主题上报；其余回退到通用 HTTP handler。
+    let mut router = Router::new().route("/__dsh_theme", any(theme_handler));
+    for route in WS_ROUTES.iter() {
+        router = router.route(*route, any(ws_handler));
+    }
+    let app = router.fallback(any(handler)).with_state(state);
 
     tauri::async_runtime::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -170,6 +182,23 @@ async fn ensure_cookie(s: &Arc<ProxyState>) {
     }
 }
 
+/// 等待会话 cookie 就绪：先惰性握手一次，再有界等待（最多约 3.2s）。
+/// 首个请求（HTTP 或 WS）可能抢在 stdout token 解析完成前到达——TCP 回退路径
+/// 先触发 on_ready 时 token 仍空——此处轮询等待 token 落盘后重试握手，
+/// 避免一次性 502 / WS 1006 误伤首次加载。
+async fn wait_cookie(s: &Arc<ProxyState>) -> String {
+    ensure_cookie(s).await;
+    for _ in 0..8 {
+        let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
+        if !cookie.is_empty() {
+            return cookie;
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        ensure_cookie(s).await;
+    }
+    s.agent_cookie.lock().unwrap().clone().unwrap_or_default()
+}
+
 /// 校验请求携带的 token（cookie `dsh_token` 或首次 query `t`）。
 fn valid_token(s: &ProxyState, uri: &Uri, headers: &HeaderMap) -> bool {
     let from_query = extract_query(uri.query().unwrap_or(""), "t");
@@ -216,19 +245,7 @@ async fn handler(
     }
 
     // 附加上游 harness 鉴权 cookie（alpha.3+ 强制）：惰性握手兜底
-    ensure_cookie(&s).await;
-    // 有界重试（2026-09-01）：首个请求可能抢在 stdout token 解析完成前到达
-    // （TCP 回退路径先触发 on_ready 时 token 仍空）。此处等待 token 落盘后重试握手，
-    // 最多约 3.2s，避免一次性 502 误伤首次加载。
-    for _ in 0..8 {
-        let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
-        if !cookie.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        ensure_cookie(&s).await;
-    }
-    let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
+    let cookie = wait_cookie(&s).await;
     if cookie.is_empty() {
         return (StatusCode::BAD_GATEWAY, "harness auth cookie unavailable").into_response();
     }
@@ -439,39 +456,62 @@ async fn ws_handler(
         }
     }
 
-    // 上游 WS 地址：剥离代理专用 token `t`，避免泄露给裸端口。
-    let pq = strip_proxy_token(uri.path_and_query().map(|x| x.as_str()).unwrap_or("/"));
-    let upstream = format!("ws://127.0.0.1:{}{}", s.agent_port, pq);
+    // 上游候选路径：浏览器请求的路径优先，其后依次回退到各代端点名。
+    // 目的：harness 改端点名时，代理无需同步发版也能连上（详见文件头 2026-09-02 修复说明）。
+    let requested = strip_proxy_token(uri.path_and_query().map(|x| x.as_str()).unwrap_or("/"));
+    let query = match requested.find('?') {
+        Some(pos) if pos + 1 < requested.len() => Some(requested[pos + 1..].to_string()),
+        _ => None,
+    };
+    let mut candidates: Vec<String> = vec![requested.clone()];
+    for route in WS_ROUTES.iter() {
+        let cand = match &query {
+            Some(q) => format!("{}?{}", route, q),
+            None => (*route).to_string(),
+        };
+        if !candidates.contains(&cand) {
+            candidates.push(cand);
+        }
+    }
 
     ws.on_upgrade(move |client_ws| async move {
-        // alpha.3+ 强制鉴权：WS 升级同样是一次 HTTP 请求，需带上 harvest 的会话 cookie。
-        // 惰性兜底：若 HTTP handler 尚未完成握手（cookie 缺失），在此再尝试一次。
-        if s.agent_cookie.lock().unwrap().is_none() && !s.agent_token.is_empty() {
-            if let Some(c) = handshake_cookie(s.agent_port, &s.agent_token).await {
-                *s.agent_cookie.lock().unwrap() = Some(c);
+        // alpha.3+ 强制鉴权：WS 升级同样是一次 HTTP 请求，需带上 harvest 的会话 cookie
+        // （直连 sidecar 时 /api/remote.mux 无 cookie 会返回 401）。
+        let cookie = wait_cookie(&s).await;
+        if cookie.is_empty() {
+            eprintln!("proxy ws: harness auth cookie unavailable, dropping upgrade");
+            return;
+        }
+
+        // 逐个候选尝试上游升级，取首个成功者；全部失败则记录每个候选的失败原因。
+        let mut connected: Option<UpstreamWs> = None;
+        let mut last_err = String::new();
+        for cand in &candidates {
+            let upstream = format!("ws://127.0.0.1:{}{}", s.agent_port, cand);
+            // Host 由 tungstenite 按 URL 自动设为 127.0.0.1:<agent_port>，与 cookie 绑定的 authority 一致。
+            let req = Request::builder()
+                .uri(upstream.as_str())
+                .header("cookie", cookie.as_str())
+                .body(());
+            match req {
+                Ok(req) => match tokio_tungstenite::connect_async(req).await {
+                    Ok((upstream_ws, _)) => {
+                        if cand != &candidates[0] {
+                            eprintln!("proxy ws: upstream path fell back to {cand}");
+                        }
+                        connected = Some(upstream_ws);
+                        break;
+                    }
+                    Err(e) => last_err.push_str(&format!("[{cand}] {e}; ")),
+                },
+                Err(e) => last_err.push_str(&format!("[{cand}] bad request: {e}; ")),
             }
         }
-        let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
 
-        // 构造带 cookie 的升级请求（Host 由 tungstenite 按 URL 自动设为 127.0.0.1:<agent_port>，
-        // 与 cookie 绑定的 authority 一致）。
-        let req = Request::builder()
-            .uri(upstream.as_str())
-            .header("cookie", cookie)
-            .body(())
-            .ok();
-
-        match req {
-            Some(req) => match tokio_tungstenite::connect_async(req).await {
-                Ok((upstream_ws, _)) => pipe(client_ws, upstream_ws).await,
-                // 上游连不上：client_ws 出作用域自动关闭，浏览器会按自身重连逻辑重试。
-                Err(e) => {
-                    eprintln!("proxy ws upstream connect failed: {e}");
-                }
-            },
-            None => {
-                eprintln!("proxy ws: failed to build upgrade request");
-            }
+        match connected {
+            // 上游连不上：client_ws 出作用域自动关闭，浏览器会按自身重连逻辑重试。
+            None => eprintln!("proxy ws upstream connect failed: {last_err}"),
+            Some(upstream_ws) => pipe(client_ws, upstream_ws).await,
         }
     })
 }
