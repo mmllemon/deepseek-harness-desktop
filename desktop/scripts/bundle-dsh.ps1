@@ -162,15 +162,23 @@ Get-ChildItem -Path $aiScan -Recurse -Filter package.json -ErrorAction SilentlyC
 $materialized = 0
 foreach ($k in $aiPkgs.Keys) {
     $dst = Join-Path $outAbs ("node_modules/" + $k)
-    if (-not (Test-Path $dst)) {
+    # 注意：deploy 可能留下空壳目录（NSIS 解包也会把 junction 变成空 dir），
+    # 不能只 Test-Path 目录 —— 必须以 package.json 为准判定"包真实存在"。
+    $real = (Test-Path (Join-Path $dst "package.json"))
+    if (-not $real) {
         $srcDir = $aiPkgs[$k]
-        if (-not (Test-Path (Join-Path $srcDir 'lib'))) {
+        $libOk = Test-Path (Join-Path $srcDir 'lib')
+        if (-not $libOk) {
             Write-Error "package $k missing from dsh-dist AND has no built lib/ in checkout ($srcDir) -- harness build incomplete"
             exit 1
         }
+        if (Test-Path $dst) {
+            # 空壳目录（可能来自 junction dereference）：清掉再复制真实内容
+            Remove-Item -Recurse -Force $dst
+        }
         Copy-Item -Recurse -Force $srcDir $dst
         $materialized++
-        Write-Host "   materialized: $k"
+        Write-Host "   materialized: $k$(if (-not $libOk) { ' (WARNING: no lib/)' })"
     }
 }
 Write-Host "==> @deepseek-ai materialization done ($materialized copied)"
