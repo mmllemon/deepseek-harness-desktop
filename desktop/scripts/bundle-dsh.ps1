@@ -134,6 +134,48 @@ cmd /c "cd /d `"$outAbs`" && del /s /q $pat" 2>$null
 Write-Host "==> dsh-dist pruned"
 
 # ---------------------------------------------------------------------------
+# Post-deploy repair: materialize @deepseek-ai workspace packages that
+# `pnpm deploy --legacy` silently dropped.
+#
+# WHY: vendor packages consumed via `file:` specs (e.g. @deepseek-ai/cordis ->
+# file:vendor/cordis) declare workspace:^ sub-dependencies (@deepseek-ai/cosmokit,
+# @deepseek-ai/schemastery, @deepseek-ai/cordis-plugin-*) that the deploy cannot
+# resolve, so that whole closure never lands in dsh-dist. At runtime the harness
+# imports them by package name via hoisted resolution, so copying the BUILT
+# package dirs (lib/ produced by `pnpm run build`) from the harness checkout
+# into dsh-dist/node_modules as real directories is sufficient.
+# ---------------------------------------------------------------------------
+Write-Host "==> materializing dropped @deepseek-ai packages"
+$aiPkgs = @{}
+$aiScan = @()
+foreach ($d in @('apps', 'packages', 'vendor')) {
+    $p = Join-Path $hDir $d
+    if (Test-Path $p) { $aiScan += $p }
+}
+Get-ChildItem -Path $aiScan -Recurse -Filter package.json -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } | ForEach-Object {
+        try { $sp = Get-Content $_.FullName -Raw | ConvertFrom-Json } catch { return }
+        if ($sp.PSObject.Properties['name'] -and $sp.name -like '@deepseek-ai/*' -and -not $aiPkgs.ContainsKey($sp.name)) {
+            $aiPkgs[$sp.name] = $_.Directory.FullName
+        }
+    }
+$materialized = 0
+foreach ($k in $aiPkgs.Keys) {
+    $dst = Join-Path $outAbs ("node_modules/" + $k)
+    if (-not (Test-Path $dst)) {
+        $srcDir = $aiPkgs[$k]
+        if (-not (Test-Path (Join-Path $srcDir 'lib'))) {
+            Write-Error "package $k missing from dsh-dist AND has no built lib/ in checkout ($srcDir) -- harness build incomplete"
+            exit 1
+        }
+        Copy-Item -Recurse -Force $srcDir $dst
+        $materialized++
+        Write-Host "   materialized: $k"
+    }
+}
+Write-Host "==> @deepseek-ai materialization done ($materialized copied)"
+
+# ---------------------------------------------------------------------------
 # Post-deploy patch: make dsh-settings.section() tolerate array-shaped
 # namespace sections instead of throwing.
 #
