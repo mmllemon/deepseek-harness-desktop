@@ -398,15 +398,39 @@ async fn transform_upstream(
     }
 
     let body = if let Some(script) = &inject_script {
-        let modified = if let Some(pos) = bytes.windows(7).position(|w| w == b"</head>") {
-            let mut out = bytes[..pos + 7].to_vec();
-            out.extend_from_slice(script.as_bytes());
-            out.extend_from_slice(&bytes[pos + 7..]);
-            out
-        } else {
-            let mut out = bytes.to_vec();
-            out.extend_from_slice(script.as_bytes());
-            out
+        // 注入位置优先级：<head> 开标签之后（最早）> </head> 之前 > 末尾追加。
+        // 根因：harness 客户端由 <head> 里的经典脚本（/plugins/??...client.js）同步加载并 mount
+        //   angelina-themes 插件，插件 mount 时 bridge.restore() 即读 localStorage[KEY]。若还原脚本
+        //   注入在 </head>（晚于该经典脚本），插件读到空 localStorage -> 用默认主题；随后代理脚本
+        //   才写入保存值，但插件已挂载不再重读 -> 主题重启回默认，且插件触发的 theme/change 还会
+        //   把默认 'angelina-light' 写回 config.ui.theme，造成「配置也被改回默认」。
+        // 抢在 <head> 开标签之后注入，保证 localStorage[KEY] 在插件 mount/restore 之前已就位。
+        let mut insert_at: Option<usize> = None;
+        if let Some(h) = bytes.windows(5).position(|w| w == b"<head") {
+            for i in h..bytes.len().min(h + 64) {
+                if bytes[i] == b'>' {
+                    insert_at = Some(i + 1);
+                    break;
+                }
+            }
+        }
+        if insert_at.is_none() {
+            if let Some(pos) = bytes.windows(7).position(|w| w == b"</head>") {
+                insert_at = Some(pos + 7);
+            }
+        }
+        let modified = match insert_at {
+            Some(at) => {
+                let mut out = bytes[..at].to_vec();
+                out.extend_from_slice(script.as_bytes());
+                out.extend_from_slice(&bytes[at..]);
+                out
+            }
+            None => {
+                let mut out = bytes.to_vec();
+                out.extend_from_slice(script.as_bytes());
+                out
+            }
         };
         Body::from(modified)
     } else {
