@@ -69,10 +69,17 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      # 缓存键绑定 commit sha：任何源码/CI 改动都令旧 target 失效，强制全量重编，
+      # 杜绝 rust-cache 恢复旧 app 二进制。事故复盘（2026-09-03）：b8deed0 的 #96 构建
+      # 被 rust-cache 复用旧 target 污染，交付了不含 proxy.rs 主题注入修复（注入点前移
+      # 到 <head> 之后）的旧 exe，导致用户"重启不保留主题"且所有重装都无效。
+      # 注：密钥仅基于 Cargo.lock，proxy.rs 等源码改动不会令其失效，故必须绑定 sha。
+      # 代价是每次构建重编译依赖，但结果严格等于当前源码，确定性优先。
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: D:\wb\src-tauri
+          key: ci-${{ github.sha }}
 
       # 强制重编桌面 app crate，杜绝 rust-cache 恢复旧 target/ 导致二进制落后源码。
       # 事故复盘（2026-09-02）：run 33619399679 构建 754ed63（WS 路由改 remote.mux），
@@ -86,10 +93,12 @@ jobs:
         shell: pwsh
         working-directory: D:\wb\src-tauri
         run: |
-          cargo clean -p deepseek-harness-desktop
+          # 全量 clean：rust-cache 已绑定 sha 键（src-tauri 源码/CI 改动即失效），
+          # 此处再清一次 target，双保险确保 proxy.rs 等改动必然重编，绝不复用旧二进制。
+          cargo clean
           if ($LASTEXITCODE -ne 0) {
-            Write-Warning "cargo clean -p failed (exit $LASTEXITCODE); falling back to full target clean"
-            cargo clean
+            Write-Error "cargo clean failed (exit $LASTEXITCODE)"
+            exit 1
           }
 
       # ---- Pin & clone upstream deepseek-harness at the locked SHA ----
