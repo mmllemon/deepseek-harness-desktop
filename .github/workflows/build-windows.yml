@@ -74,6 +74,24 @@ jobs:
         with:
           workspaces: D:\wb\src-tauri
 
+      # 强制重编桌面 app crate，杜绝 rust-cache 恢复旧 target/ 导致二进制落后源码。
+      # 事故复盘（2026-09-02）：run 33619399679 构建 754ed63（WS 路由改 remote.mux），
+      # 但产物 exe 的 mtime 为 9/1 23:14，早于 run 开始（9/2 10:25Z）与提交（9/2 18:25+08）。
+      # 根因：rust-cache@v2 恢复出 9/1 编译的旧 target/，其 .rlib/.exe 的 mtime 晚于
+      # 本次 checkout 的源码 mtime → cargo 判定源码未变 → 跳过 proxy.rs 重编 → 装出去的是
+      # 不含修复的旧二进制，WS 隧道永远落在 HTTP fallback（101 响应带 dsh_token cookie）。
+      # 此处仅 clean 桌面 app crate（依赖缓存保留，整体构建时长几乎不变），保证运行中的
+      # 二进制始终等于当前源码；cargo clean 失败则回退到全量 clean。
+      - name: Force recompile of desktop app crate (defeat stale rust-cache)
+        shell: pwsh
+        working-directory: D:\wb\src-tauri
+        run: |
+          cargo clean -p deepseek-harness-desktop
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "cargo clean -p failed (exit $LASTEXITCODE); falling back to full target clean"
+            cargo clean
+          }
+
       # ---- Pin & clone upstream deepseek-harness at the locked SHA ----
       # Single source of truth = UPSTREAM.lock.json. CI 不会使用未锁定的上游提交。
       - name: Pin & clone upstream harness
