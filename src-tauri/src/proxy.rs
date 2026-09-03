@@ -29,12 +29,13 @@ use crate::config;
 use crate::state::AppState;
 use axum::extract::ws::{Message as AMessage, WebSocket as AWebSocket, WebSocketUpgrade};
 use axum::extract::{OriginalUri, State};
-use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
+use axum::http::{header::COOKIE, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as TMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -73,10 +74,7 @@ pub async fn start_proxy(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| e.to_string())?;
-    let proxy_port = listener
-        .local_addr()
-        .map_err(|e| e.to_string())?
-        .port();
+    let proxy_port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let agent_cookie: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     // 与上游 harness 完成 token 交换，harvest 签名会话 cookie（alpha.3+ 强制鉴权）。
@@ -254,10 +252,11 @@ async fn handler(
     let theme = s.theme.clone();
 
     // 首次转发
-    let resp = match forward_upstream(&s, method.clone(), &uri, &headers, body.clone(), &cookie).await {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
-    };
+    let resp =
+        match forward_upstream(&s, method.clone(), &uri, &headers, body.clone(), &cookie).await {
+            Ok(r) => r,
+            Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+        };
     let status = resp.status();
 
     // 401 = 会话 cookie 过期或被拒：重新握手一次后重试（同样使用实时 token）
@@ -374,7 +373,13 @@ async fn transform_upstream(
     let upstream_headers = resp.headers().clone();
     let bytes = match resp.bytes().await {
         Ok(b) => b,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("read upstream body failed: {e}")).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("read upstream body failed: {e}"),
+            )
+                .into_response()
+        }
     };
 
     let mut builder = Response::builder().status(status);
@@ -408,7 +413,9 @@ async fn transform_upstream(
         Body::from(bytes)
     };
 
-    builder.body(body).unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "build response failed").into_response())
+    builder
+        .body(body)
+        .unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "build response failed").into_response())
 }
 
 /// 接收 SPA（angelina-themes 插件）上报的当前主题，持久化到 AppConfig.ui.theme（config.json）。
@@ -488,23 +495,30 @@ async fn ws_handler(
         let mut last_err = String::new();
         for cand in &candidates {
             let upstream = format!("ws://127.0.0.1:{}{}", s.agent_port, cand);
-            // Host 由 tungstenite 按 URL 自动设为 127.0.0.1:<agent_port>，与 cookie 绑定的 authority 一致。
-            let req = Request::builder()
-                .uri(upstream.as_str())
-                .header("cookie", cookie.as_str())
-                .body(());
-            match req {
-                Ok(req) => match tokio_tungstenite::connect_async(req).await {
-                    Ok((upstream_ws, _)) => {
-                        if cand != &candidates[0] {
-                            eprintln!("proxy ws: upstream path fell back to {cand}");
-                        }
-                        connected = Some(upstream_ws);
-                        break;
+            // 关键修复（2026-09-03）：必须用 into_client_request() 由 URL 构造请求，
+            // 让 tungstenite 自动补齐握手头（Sec-WebSocket-Key / Upgrade / Connection /
+            // Sec-WebSocket-Version）。手动 Request::builder() 不会补 Sec-WebSocket-Key，
+            // 上游会回 "Missing sec-websocket-key" 而升级失败 -> 客户端 WS 1006。
+            // Host 由 URL 自动设为 127.0.0.1:<agent_port>，与 cookie 绑定的 authority 一致。
+            let mut req = match upstream.as_str().into_client_request() {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err.push_str(&format!("[{cand}] bad request: {e}; "));
+                    continue;
+                }
+            };
+            if let Ok(v) = HeaderValue::from_str(&cookie) {
+                req.headers_mut().insert(COOKIE, v);
+            }
+            match tokio_tungstenite::connect_async(req).await {
+                Ok((upstream_ws, _)) => {
+                    if cand != &candidates[0] {
+                        eprintln!("proxy ws: upstream path fell back to {cand}");
                     }
-                    Err(e) => last_err.push_str(&format!("[{cand}] {e}; ")),
-                },
-                Err(e) => last_err.push_str(&format!("[{cand}] bad request: {e}; ")),
+                    connected = Some(upstream_ws);
+                    break;
+                }
+                Err(e) => last_err.push_str(&format!("[{cand}] {e}; ")),
             }
         }
 
