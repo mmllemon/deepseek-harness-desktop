@@ -18,9 +18,13 @@
 //! "连接中…" + "正在加载模型…"。
 //! 对策：路由侧同时注册三代端点名，上游侧按候选列表依次尝试，取首个握手成功者。
 
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+
+use brotli::Decompressor;
+use flate2::read::{GzDecoder, ZlibDecoder};
 
 use axum::body::{Body, Bytes};
 use tauri::Manager;
@@ -345,7 +349,7 @@ async fn transform_upstream(
     // 收集完整字节（注入脚本需要知道 </head> 位置）
     // 注意：reqwest::Response::bytes() 会消费 resp（move），需先克隆 headers。
     let upstream_headers = resp.headers().clone();
-    let bytes = match resp.bytes().await {
+    let raw = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
             return (
@@ -355,15 +359,33 @@ async fn transform_upstream(
                 .into_response()
         }
     };
+    // 关键修复（2026-09-04）：reqwest 默认 feature 不含 gzip/brotli/deflate，不会自动解压响应体。
+    // 若上游 harness 对 root HTML 启用 Content-Encoding 压缩，raw 即为压缩字节流，
+    // 下游对 <head> 的搜索会失败、注入脚本被追加到压缩流末尾，浏览器解压后丢弃尾部游离文本，
+    // 导致注入的 localStorage.setItem 永不执行（症状：主题不保存）。此处先按 content-encoding 解压为明文。
+    let content_encoding = upstream_headers
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let bytes: Vec<u8> = if content_encoding.contains("gzip") {
+        decode_gzip(&raw).unwrap_or_else(|_| raw.to_vec())
+    } else if content_encoding.contains("deflate") {
+        decode_deflate(&raw).unwrap_or_else(|_| raw.to_vec())
+    } else if content_encoding.contains("br") {
+        decode_brotli(&raw).unwrap_or_else(|_| raw.to_vec())
+    } else {
+        raw.to_vec()
+    };
 
     // 主题注入：对 / 根路径、且响应体看起来像 HTML 时，注入「上报脚本」（始终）+「初始主题设置」（仅当已保存主题非空）。
     // 上报脚本：拦截 localStorage.setItem 并轮询 dsh-angelina-themes.selection，
     //   一旦 SPA（angelina-themes 插件）改动主题即 POST 到 /__dsh_theme，由后端持久化到 AppConfig.ui.theme。
     // 目的：proxy 端口每次随机 → origin 变化 → localStorage 清空；靠后端记住主题，启动期注入还原。
-    // 关键修复（2026-09-04）：放宽 Content-Type 判定。此前严格要求 starts_with("text/html")，
-    //   但 harness 各版本/构建的 root 响应 Content-Type 不一定满足（可能缺失、大小写差异、或带 charset 等参数），
-    //   导致代理完全跳过注入 → 每次随机端口重启后 localStorage 被清空、主题无法还原（症状：主题不保存）。
-    //   现改为「Content-Type 宽松匹配 + body 嗅探 HTML 标记」双兜底，确保 root 的 HTML 一定被注入。
+    // 说明（2026-09-04）：这里对 Content-Type 做宽松匹配 + body 嗅探双兜底，是为了兜底
+    //   harness 某些构建把 root 响应的 Content-Type 写成非 "text/html" 前缀的情况（防御性）。
+    //   真正的根因见上方解压逻辑：reqwest 默认 feature 不含 gzip/brotli/deflate，不会自动解压，
+    //   压缩响应体若不先解压再注入，脚本会被追加到压缩流末尾、浏览器解压后丢弃 → 永不执行。
     let body_is_html = {
         let ct = upstream_headers
             .get("content-type")
@@ -404,9 +426,10 @@ async fn transform_upstream(
             .unwrap_or("");
         let _ = writeln!(
             f,
-            "[inject] is_root={} body_is_html={} ct={:?} len={} injected={}",
+            "[inject] is_root={} body_is_html={} ce={:?} ct={:?} len={} injected={}",
             is_root,
             body_is_html,
+            content_encoding,
             ct,
             bytes.len(),
             inject_script.is_some()
@@ -419,6 +442,7 @@ async fn transform_upstream(
         if kn.eq_ignore_ascii_case("content-length")
             || kn.eq_ignore_ascii_case("transfer-encoding")
             || kn.eq_ignore_ascii_case("connection")
+            || kn.eq_ignore_ascii_case("content-encoding")
         {
             continue;
         }
@@ -696,4 +720,26 @@ fn extract_cookie(headers: &HeaderMap, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+// —— 响应体解压（reqwest 默认 feature 不含压缩支持，需手动处理）——
+fn decode_gzip(b: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    let mut d = GzDecoder::new(b);
+    let mut out = Vec::new();
+    d.read_to_end(&mut out)?;
+    Ok(out)
+}
+
+fn decode_deflate(b: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    let mut d = ZlibDecoder::new(b);
+    let mut out = Vec::new();
+    d.read_to_end(&mut out)?;
+    Ok(out)
+}
+
+fn decode_brotli(b: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    let mut d = Decompressor::new(b, 4096);
+    let mut out = Vec::new();
+    d.read_to_end(&mut out)?;
+    Ok(out)
 }
