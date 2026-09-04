@@ -373,7 +373,7 @@ async fn transform_upstream(
         if ct.starts_with("text/html") || ct.starts_with("application/xhtml") {
             true
         } else {
-            let head: &[u8] = bytes[..bytes.len().min(1024)];
+            let head: &[u8] = &bytes[..bytes.len().min(1024)];
             let low = String::from_utf8_lossy(head).to_ascii_lowercase();
             low.contains("<!doctype") || low.contains("<html") || low.contains("<head")
         }
