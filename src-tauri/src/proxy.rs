@@ -342,32 +342,6 @@ async fn transform_upstream(
 ) -> Response {
     let status = resp.status();
 
-    // 主题注入：对 / 根路径且 text/html 的响应，注入「上报脚本」（始终）+「初始主题设置」（仅当已保存主题非空）。
-    // 上报脚本：拦截 localStorage.setItem 并轮询 dsh-angelina-themes.selection，
-    //   一旦 SPA（angelina-themes 插件）改动主题即 POST 到 /__dsh_theme，由后端持久化到 AppConfig.ui.theme。
-    // 目的：proxy 端口每次随机 → origin 变化 → localStorage 清空；靠后端记住主题，启动期注入还原。
-    let inject_script = if is_root {
-        let ct = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .starts_with("text/html");
-        if ct {
-            let theme_id = theme.as_ref().filter(|t| !t.is_empty());
-            let set_part = match theme_id {
-                Some(t) => format!("try{{localStorage.setItem(KEY,'{}')}}catch(e){{}}", t),
-                None => String::new(),
-            };
-            let reporter = r#"<script>var KEY='dsh-angelina-themes.selection';function __dsh_report(v){try{fetch('/__dsh_theme',{method:'POST',body:''+v}).catch(function(){})}catch(e){}}var __dsh_s=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){__dsh_s.call(this,k,v);if(k===KEY)__dsh_report(v);};var __dsh_l=localStorage.getItem(KEY);setInterval(function(){var c=localStorage.getItem(KEY);if(c!==__dsh_l){__dsh_l=c;__dsh_report(c);}},1500);{set_part}</script>"#;
-            Some(reporter.replace("{set_part}", &set_part))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     // 收集完整字节（注入脚本需要知道 </head> 位置）
     // 注意：reqwest::Response::bytes() 会消费 resp（move），需先克隆 headers。
     let upstream_headers = resp.headers().clone();
@@ -381,6 +355,63 @@ async fn transform_upstream(
                 .into_response()
         }
     };
+
+    // 主题注入：对 / 根路径、且响应体看起来像 HTML 时，注入「上报脚本」（始终）+「初始主题设置」（仅当已保存主题非空）。
+    // 上报脚本：拦截 localStorage.setItem 并轮询 dsh-angelina-themes.selection，
+    //   一旦 SPA（angelina-themes 插件）改动主题即 POST 到 /__dsh_theme，由后端持久化到 AppConfig.ui.theme。
+    // 目的：proxy 端口每次随机 → origin 变化 → localStorage 清空；靠后端记住主题，启动期注入还原。
+    // 关键修复（2026-09-04）：放宽 Content-Type 判定。此前严格要求 starts_with("text/html")，
+    //   但 harness 各版本/构建的 root 响应 Content-Type 不一定满足（可能缺失、大小写差异、或带 charset 等参数），
+    //   导致代理完全跳过注入 → 每次随机端口重启后 localStorage 被清空、主题无法还原（症状：主题不保存）。
+    //   现改为「Content-Type 宽松匹配 + body 嗅探 HTML 标记」双兜底，确保 root 的 HTML 一定被注入。
+    let body_is_html = {
+        let ct = upstream_headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ct.starts_with("text/html") || ct.starts_with("application/xhtml") {
+            true
+        } else {
+            let head: &[u8] = bytes[..bytes.len().min(1024)];
+            let low = String::from_utf8_lossy(head).to_ascii_lowercase();
+            low.contains("<!doctype") || low.contains("<html") || low.contains("<head")
+        }
+    };
+    let inject_script = if is_root && body_is_html {
+        let theme_id = theme.as_ref().filter(|t| !t.is_empty());
+        let set_part = match theme_id {
+            Some(t) => format!("try{{localStorage.setItem(KEY,'{}')}}catch(e){{}}", t),
+            None => String::new(),
+        };
+        let reporter = r#"<script>var KEY='dsh-angelina-themes.selection';function __dsh_report(v){try{fetch('/__dsh_theme',{method:'POST',body:''+v}).catch(function(){})}catch(e){}}var __dsh_s=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){__dsh_s.call(this,k,v);if(k===KEY)__dsh_report(v);};var __dsh_l=localStorage.getItem(KEY);setInterval(function(){var c=localStorage.getItem(KEY);if(c!==__dsh_l){__dsh_l=c;__dsh_report(c);}},1500);{set_part}</script>"#;
+        Some(reporter.replace("{set_part}", &set_part))
+    } else {
+        None
+    };
+
+    // 诊断日志（写入 %TEMP%/dsh_proxy_inject.log）：确认注入是否真正触发、Content-Type 实际值，
+    // 便于下次运行后核对根因（主题不保存 = 注入被跳过）。
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("dsh_proxy_inject.log"))
+    {
+        use std::io::Write;
+        let ct = upstream_headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let _ = writeln!(
+            f,
+            "[inject] is_root={} body_is_html={} ct={:?} len={} injected={}",
+            is_root,
+            body_is_html,
+            ct,
+            bytes.len(),
+            inject_script.is_some()
+        );
+    }
 
     let mut builder = Response::builder().status(status);
     for (k, v) in &upstream_headers {
