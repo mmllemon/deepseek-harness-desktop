@@ -299,11 +299,14 @@ function Resolve-RealPackage {
     # 1) top-level hoisted node_modules/<name> (a symlink in a pnpm workspace)
     $top = Join-Path $Base "node_modules/$Name"
     if (Test-Path -LiteralPath $top) { return (Resolve-Path -LiteralPath $top).Path }
-    # 2) virtual store: .pnpm/<name>@<version>/node_modules/<name>  (scoped names use '+' => '<scope>+<name>@...')
+    # 2) virtual store: .pnpm/<name>@<version>/node_modules/<name>
+    #    scoped names use '+' in the store dir ('@scope+<name>@<ver>') while the package specifier
+    #    uses '/', so normalize '/' -> '+' before matching ('@deepseek-ai/dsh-x' -> '@deepseek-ai+dsh-x').
     $store = Join-Path $Base "node_modules/.pnpm"
     if (Test-Path -LiteralPath $store) {
+        $match = $Name -replace '/', '+'
         $dirs = Get-ChildItem -LiteralPath $store -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like "*+$Name@*" -or $_.Name -like "$Name@*" }
+            Where-Object { $_.Name -like "*+$match@*" -or $_.Name -like "$match@*" }
         foreach ($d in ($dirs | Sort-Object Name -Descending)) {
             $cand = Join-Path $d.FullName "node_modules/$Name"
             if (Test-Path -LiteralPath $cand) { return (Resolve-Path -LiteralPath $cand).Path }
@@ -399,10 +402,13 @@ if ($koffiNative.Count -eq 0) { Write-Error "koffi native binary still missing a
 # STEP 6.6: Sync hoisted-only runtime deps dropped by `pnpm deploy --prod`
 # ---------------------------------------------------------------------------
 # Why: `pnpm deploy --prod` materializes only the deploy ENTRY's direct closure. Pure-JS packages
-#   that the workspace resolves purely via TOP-LEVEL hoisting (e.g. `resolve.exports`, a direct
-#   dependency of @deepseek-ai/dsh-app-boot, imported at runtime) are NOT part of that closure and
-#   get dropped. The harness's ESM loader then throws `ERR_MODULE_NOT_FOUND` when starting the web
-#   server (smoke gate (b) "harness exited before ready").
+#   that the workspace resolves purely via TOP-LEVEL hoisting are NOT part of that closure and get
+#   dropped, then the harness ESM loader throws `ERR_MODULE_NOT_FOUND`:
+#   - `resolve.exports`: direct dependency of @deepseek-ai/dsh-app-boot, imported when the harness
+#     web server starts (smoke gate (b) "harness exited before ready").
+#   - `zod` / `ws`: dynamically imported by the preset plugins @deepseek-ai/dsh-typert-registry
+#     (zod) and @deepseek-ai/dsh-api-gateway (ws) at plugin-load time; the plugins are optional
+#     dependencies of the CLI, so the --prod closure omits both (smoke gate (b) ERR_MODULE_NOT_FOUND).
 # Fix: mirror each such package's REAL dir from the harness source store into dsh-dist's TOP-LEVEL
 #   node_modules so Node's ancestor-directory walk resolves it. Doesn't need the .pnpm scaffolding
 #   that the deploy prunes. Verification: smoke gate (b) starts the harness web server; any dropped
@@ -420,13 +426,13 @@ function Sync-MissingRuntimeDeps {
     }
 }
 Write-Host "==> syncing hoisted-only runtime deps into dsh-dist"
-Sync-MissingRuntimeDeps -HarnessDir $hDir -OutDir $outAbs -Names @('resolve.exports')
+Sync-MissingRuntimeDeps -HarnessDir $hDir -OutDir $outAbs -Names @('resolve.exports', 'zod', 'ws')
 
 # ---------------------------------------------------------------------------
 # Verification gates
 # ---------------------------------------------------------------------------
 Write-Host "==> running verification gates"
-foreach ($m in @('node-pty', 'koffi', 'resolve.exports')) {
+foreach ($m in @('node-pty', 'koffi', 'resolve.exports', 'zod', 'ws')) {
     $mp = Join-Path $outAbs "node_modules/$m"
     if (-not (Test-Path (Join-Path $mp 'package.json'))) {
         Write-Error "$m missing/empty in dsh-dist after pnpm deploy -- this breaks native-module features (terminal/FFI) or the harness web server (ESM dep). Check bundle-dsh native-module promotion / runtime-dep sync."
