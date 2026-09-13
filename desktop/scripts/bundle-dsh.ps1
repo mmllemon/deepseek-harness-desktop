@@ -244,6 +244,18 @@ try {
     Pop-Location
 }
 
+# STEP 3.5: Rebuild native modules at source so deploy carries built .node binaries.
+# pnpm 10+ skips unapproved dependency build scripts (node-gyp / prebuilt download) by
+# default, so without this node-pty/koffi land in dsh-dist as JS-only dirs and smoke(b2) fails.
+Write-Host "==> pnpm rebuild node-pty koffi"
+Push-Location $hDir
+try {
+    pnpm rebuild node-pty koffi
+    if ($LASTEXITCODE -ne 0) { throw "pnpm rebuild native failed (exit $LASTEXITCODE)" }
+} finally {
+    Pop-Location
+}
+
 # STEP 4: Deploy
 Write-Host "==> pnpm deploy @deepseek-ai/dsh -> $outAbs"
 Push-Location $hDir
