@@ -396,16 +396,43 @@ Write-Host "   $koffiArchSub resident native file(s) in dsh-dist: $($koffiNative
 if ($koffiNative.Count -eq 0) { Write-Error "koffi native binary still missing after install -- smoke gate (b2) will fail"; exit 1 }
 
 # ---------------------------------------------------------------------------
+# STEP 6.6: Sync hoisted-only runtime deps dropped by `pnpm deploy --prod`
+# ---------------------------------------------------------------------------
+# Why: `pnpm deploy --prod` materializes only the deploy ENTRY's direct closure. Pure-JS packages
+#   that the workspace resolves purely via TOP-LEVEL hoisting (e.g. `resolve.exports`, a direct
+#   dependency of @deepseek-ai/dsh-app-boot, imported at runtime) are NOT part of that closure and
+#   get dropped. The harness's ESM loader then throws `ERR_MODULE_NOT_FOUND` when starting the web
+#   server (smoke gate (b) "harness exited before ready").
+# Fix: mirror each such package's REAL dir from the harness source store into dsh-dist's TOP-LEVEL
+#   node_modules so Node's ancestor-directory walk resolves it. Doesn't need the .pnpm scaffolding
+#   that the deploy prunes. Verification: smoke gate (b) starts the harness web server; any dropped
+#   dependency aborts with ERR_MODULE_NOT_FOUND, so the gate passes only when the closure is complete.
+function Sync-MissingRuntimeDeps {
+    param([string]$HarnessDir, [string]$OutDir, [string[]]$Names)
+    foreach ($Name in $Names) {
+        $dstTop = Join-Path $OutDir "node_modules/$Name"
+        if (Test-Path (Join-Path $dstTop 'package.json')) { continue }
+        $srcReal = Resolve-RealPackage -Base $HarnessDir -Name $Name
+        if (-not $srcReal) { Write-Error "runtime dep $Name missing from both source store and dsh-dist"; exit 1 }
+        New-Item -ItemType Directory -Force -Path (Split-Path $dstTop) | Out-Null
+        Copy-Item -LiteralPath $srcReal -Destination $dstTop -Recurse -Force -ErrorAction Stop
+        Write-Host "   synced runtime dep $Name <- $srcReal -> $dstTop"
+    }
+}
+Write-Host "==> syncing hoisted-only runtime deps into dsh-dist"
+Sync-MissingRuntimeDeps -HarnessDir $hDir -OutDir $outAbs -Names @('resolve.exports')
+
+# ---------------------------------------------------------------------------
 # Verification gates
 # ---------------------------------------------------------------------------
 Write-Host "==> running verification gates"
-foreach ($m in @('node-pty', 'koffi')) {
+foreach ($m in @('node-pty', 'koffi', 'resolve.exports')) {
     $mp = Join-Path $outAbs "node_modules/$m"
-    if (-not (Test-Path $mp)) {
-        Write-Error "$m missing from dsh-dist after pnpm deploy -- this breaks native-module features (terminal/FFI). Check bundle-dsh native-module promotion."
+    if (-not (Test-Path (Join-Path $mp 'package.json'))) {
+        Write-Error "$m missing/empty in dsh-dist after pnpm deploy -- this breaks native-module features (terminal/FFI) or the harness web server (ESM dep). Check bundle-dsh native-module promotion / runtime-dep sync."
         exit 1
     }
-    Write-Host "   verified native module present: $m"
+    Write-Host "   verified native/runtime module present: $m"
 }
 
 $entry = Join-Path $outAbs "lib/bin.js"
