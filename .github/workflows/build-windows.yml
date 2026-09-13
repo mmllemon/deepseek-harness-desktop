@@ -21,19 +21,16 @@ concurrency:
 env:
   CI: "true"
 
+# ---------------------------------------------------------------------------
+# Job 1: Rust compile + clippy (lightweight, runs in parallel with harness build)
+# ---------------------------------------------------------------------------
 jobs:
-  build-windows:
+  rust-check:
     runs-on: windows-latest
-    # Hard cap so a hung step fails in ~2h instead of burning the full 6h runner slot.
-    timeout-minutes: 120
-    # All `run` steps execute under the short path D:\wb so that the deepest
-    # pnpm virtual-store paths (e.g. @mistralai/mistralai/esm/models/operations/...)
-    # stay under Windows' MAX_PATH (260) when NSIS' `File /r` reads them.
-    # Without this, `makensis` aborts with "failed opening file" on long paths.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: D:\wb
-
     steps:
       - name: Checkout (desktop repo)
         uses: actions/checkout@v4
@@ -45,8 +42,64 @@ jobs:
           if exist D:\wb rmdir /s /q D:\wb
           robocopy "%GITHUB_WORKSPACE%" "D:\wb" /E /XD .git /NFL /NDL /NJH /NJS /NP || ver >nul
 
-      # Stamp the current CI run id into UPSTREAM.lock.json for traceability
-      # (the file's `ciRunId` placeholder; not committed, used only during the run).
+      - name: Setup Rust toolchain (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - name: Rust cache (commit-sha bound)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: D:\wb\src-tauri
+          key: ci-${{ github.sha }}
+
+      - name: Force recompile (defeat stale rust-cache)
+        shell: pwsh
+        working-directory: D:\wb\src-tauri
+        run: |
+          # 校验 rust-cache 恢复的 target mtime 是否早于源码 checkout 时间
+          $targetMtime = (Get-Item D:\wb\src-tauri\target -ErrorAction SilentlyContinue).LastWriteTime
+          $checkoutTime = (Get-Item D:\wb -ErrorAction SilentlyContinue).LastWriteTime
+          if ($targetMtime -and $checkoutTime -and $targetMtime -gt $checkoutTime) {
+            Write-Host "WARNING: rust-cache restored stale target (mtime=$targetMtime > checkout=$checkoutTime), forcing clean"
+            cargo clean
+          } else {
+            Write-Host "rust-cache target OK or not present"
+          }
+          # 再清一次确保万无一失
+          cargo clean
+
+      - name: cargo check (fast compile check)
+        shell: pwsh
+        working-directory: D:\wb\src-tauri
+        run: cargo check --all-targets --all-features
+
+      - name: cargo clippy (lint check)
+        shell: pwsh
+        working-directory: D:\wb\src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Harness build + Tier 2 bundle (CPU-heavy, standalone)
+  # ---------------------------------------------------------------------------
+  build-harness:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: D:\wb
+    steps:
+      - name: Checkout (desktop repo)
+        uses: actions/checkout@v4
+
+      - name: Relocate source to short path D:\wb
+        shell: cmd
+        working-directory: D:\a
+        run: |
+          if exist D:\wb rmdir /s /q D:\wb
+          robocopy "%GITHUB_WORKSPACE%" "D:\wb" /E /XD .git /NFL /NDL /NJH /NJS /NP || ver >nul
+
       - name: Stamp CI run id into lock
         shell: pwsh
         run: |
@@ -64,45 +117,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Setup Rust toolchain (x86_64-pc-windows-msvc)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      # 缓存键绑定 commit sha：任何源码/CI 改动都令旧 target 失效，强制全量重编，
-      # 杜绝 rust-cache 恢复旧 app 二进制。事故复盘（2026-09-03）：b8deed0 的 #96 构建
-      # 被 rust-cache 复用旧 target 污染，交付了不含 proxy.rs 主题注入修复（注入点前移
-      # 到 <head> 之后）的旧 exe，导致用户"重启不保留主题"且所有重装都无效。
-      # 注：密钥仅基于 Cargo.lock，proxy.rs 等源码改动不会令其失效，故必须绑定 sha。
-      # 代价是每次构建重编译依赖，但结果严格等于当前源码，确定性优先。
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: D:\wb\src-tauri
-          key: ci-${{ github.sha }}
-
-      # 强制重编桌面 app crate，杜绝 rust-cache 恢复旧 target/ 导致二进制落后源码。
-      # 事故复盘（2026-09-02）：run 33619399679 构建 754ed63（WS 路由改 remote.mux），
-      # 但产物 exe 的 mtime 为 9/1 23:14，早于 run 开始（9/2 10:25Z）与提交（9/2 18:25+08）。
-      # 根因：rust-cache@v2 恢复出 9/1 编译的旧 target/，其 .rlib/.exe 的 mtime 晚于
-      # 本次 checkout 的源码 mtime → cargo 判定源码未变 → 跳过 proxy.rs 重编 → 装出去的是
-      # 不含修复的旧二进制，WS 隧道永远落在 HTTP fallback（101 响应带 dsh_token cookie）。
-      # 此处仅 clean 桌面 app crate（依赖缓存保留，整体构建时长几乎不变），保证运行中的
-      # 二进制始终等于当前源码；cargo clean 失败则回退到全量 clean。
-      - name: Force recompile of desktop app crate (defeat stale rust-cache)
-        shell: pwsh
-        working-directory: D:\wb\src-tauri
-        run: |
-          # 全量 clean：rust-cache 已绑定 sha 键（src-tauri 源码/CI 改动即失效），
-          # 此处再清一次 target，双保险确保 proxy.rs 等改动必然重编，绝不复用旧二进制。
-          cargo clean
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "cargo clean failed (exit $LASTEXITCODE)"
-            exit 1
-          }
-
-      # ---- Pin & clone upstream deepseek-harness at the locked SHA ----
-      # Single source of truth = UPSTREAM.lock.json. CI 不会使用未锁定的上游提交。
       - name: Pin & clone upstream harness
         shell: pwsh
         run: |
@@ -113,14 +127,6 @@ jobs:
           Write-Host "Cloning $repo @ $sha"
           git clone --no-checkout "https://github.com/$repo.git" deepseek-harness
           git -C deepseek-harness checkout $sha
-
-      # NOTE: We deliberately do NOT cache the harness build outputs
-      # (apps/cli/lib, apps/web/dist, packages/**/lib). The `Build harness`
-      # step always runs `pnpm install && pnpm run build`, so a restored
-      # cache would be overwritten anyway, and saving that very large tree
-      # frequently hangs the runner on upload (observed: step stuck for
-      # hours on "Post Cache harness build artifacts"). The SHA is pinned,
-      # so the only cost is the ~21-min rebuild, which is within budget.
 
       - name: Cache pnpm store
         uses: actions/cache@v4
@@ -134,12 +140,113 @@ jobs:
         shell: pwsh
         run: pwsh desktop/scripts/build-harness.ps1 -HarnessDir ./deepseek-harness
 
-      # ---- Tier 2 sidecar: pnpm deploy harness -> dsh-dist (self-contained node_modules) ----
       - name: "Bundle dsh sidecar (Tier 2: node.exe + node_modules)"
         shell: pwsh
         run: pwsh desktop/scripts/bundle-dsh.ps1 -HarnessDir ./deepseek-harness -OutDir ./dsh-dist
 
-      # Frontend deps are pinned via the committed package-lock.json for reproducible builds.
+      - name: Upload dsh-dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-dist
+          path: dsh-dist/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Frontend + Tauri build (depends on harness bundle)
+  # ---------------------------------------------------------------------------
+  build-frontend:
+    runs-on: windows-latest
+    needs: [build-harness]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: D:\wb
+    steps:
+      - name: Checkout (desktop repo)
+        uses: actions/checkout@v4
+
+      - name: Relocate source to short path D:\wb
+        shell: cmd
+        working-directory: D:\a
+        run: |
+          if exist D:\wb rmdir /s /q D:\wb
+          robocopy "%GITHUB_WORKSPACE%" "D:\wb" /E /XD .git /NFL /NDL /NJH /NJS /NP || ver >nul
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download dsh-dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-dist
+          path: dsh-dist/
+
+      - name: npm ci (frontend deps)
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Job 4: Full Tauri build + smoke test
+  # ---------------------------------------------------------------------------
+  build-windows:
+    runs-on: windows-latest
+    needs: [rust-check, build-harness, build-frontend]
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: D:\wb
+    steps:
+      - name: Checkout (desktop repo)
+        uses: actions/checkout@v4
+
+      - name: Relocate source to short path D:\wb
+        shell: cmd
+        working-directory: D:\a
+        run: |
+          if exist D:\wb rmdir /s /q D:\wb
+          robocopy "%GITHUB_WORKSPACE%" "D:\wb" /E /XD .git /NFL /NDL /NJH /NJS /NP || ver >nul
+
+      - name: Setup Rust toolchain (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache (commit-sha bound)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: D:\wb\src-tauri
+          key: ci-${{ github.sha }}
+
+      - name: Force recompile (defeat stale rust-cache)
+        shell: pwsh
+        working-directory: D:\wb\src-tauri
+        run: |
+          # 校验 rust-cache 恢复的 target mtime 是否早于源码 checkout 时间
+          $targetMtime = (Get-Item D:\wb\src-tauri\target -ErrorAction SilentlyContinue).LastWriteTime
+          $checkoutTime = (Get-Item D:\wb -ErrorAction SilentlyContinue).LastWriteTime
+          if ($targetMtime -and $checkoutTime -and $targetMtime -gt $checkoutTime) {
+            Write-Host "WARNING: rust-cache restored stale target (mtime=$targetMtime > checkout=$checkoutTime), forcing clean"
+            cargo clean
+          } else {
+            Write-Host "rust-cache target OK or not present"
+          }
+          cargo clean
+
+      - name: Download dsh-dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-dist
+          path: dsh-dist/
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: npm ci (frontend deps)
         run: npm ci
 
@@ -175,17 +282,6 @@ jobs:
         id: tauri
         run: npm run tauri build
 
-      # ---- code signing (placeholder) ----
-      # 生产环境推荐使用 Azure Trusted Signing 或自签证书 + signtool。
-      # - name: Azure Trusted Signing
-      #   uses: azure/trusted-signing-action@v0
-      #   with:
-      #     endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-      #     trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT }}
-      #     certificate-profile-name: ${{ secrets.AZURE_TS_PROFILE }}
-      #     files: |
-      #       src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-
       - name: Smoke test (section 12.6 acceptance gate)
         shell: pwsh
         run: pwsh desktop/scripts/smoke.ps1 -EntryPath ./dsh-dist/lib/bin.js
@@ -199,13 +295,10 @@ jobs:
           $src = "D:\wb\src-tauri\target\release\bundle"
           $dst = "$env:GITHUB_WORKSPACE\src-tauri\target\release\bundle"
           if (-not (Test-Path $src)) {
-            # fallback: also try the host-triple subdir
             $src = "D:\wb\src-tauri\target\x86_64-pc-windows-msvc\release\bundle"
           }
           Write-Host "staging from $src -> $dst"
           if (Test-Path $src) {
-            # robocopy returns 0-7 on success, 8+ on error. Absorb the success
-            # code so PowerShell does not propagate it as a non-zero step exit.
             robocopy $src $dst /E /NFL /NDL /NJH /NJS | Out-Null
             $rc = $LASTEXITCODE
             if ($rc -ge 8) { throw "robocopy failed (exit $rc)" }
@@ -213,7 +306,6 @@ jobs:
             throw "no bundle dir found under D:\wb"
           }
           Get-ChildItem $dst -Recurse -Include *.exe,*.msi | ForEach-Object { Write-Host "  found: $($_.FullName)" }
-          # Force a clean 0 exit; the deployable artifact is already uploaded.
           exit 0
 
       - name: Upload installer artifact

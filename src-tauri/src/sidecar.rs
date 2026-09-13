@@ -348,8 +348,8 @@ pub fn current_status(app: &tauri::AppHandle) -> AgentStatus {
     }
 }
 
-/// 显式解析 node 外部二进制：优先资源目录/安装根目录下的 triple 命名文件，
-/// 回退到 `node.exe`，并兼容 `binaries/` 子目录。任一存在即采用。
+/// 显式解析 node 外部二进制：优先 triple 命名（构建脚本产出），回退到 node.exe。
+/// 路径搜索顺序：resource_dir > exe_dir（与 tauri externalBin 约定对齐）。
 fn resolve_node(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let exe_dir = std::env::current_exe()
         .map_err(|e| format!("获取 exe 路径失败: {e}"))?
@@ -360,14 +360,17 @@ fn resolve_node(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .path()
         .resource_dir()
         .map_err(|e| format!("获取资源目录失败: {e}"))?;
+    // 构建脚本将 node.exe 复制到 src-tauri/ 和 src-tauri/binaries/ 两个位置（见 build-windows.yml），
+    // Tauri 的 externalBin 机制会把它们放到 resource_dir/（triple 名）或 resource_dir/binaries/。
+    // 此处按优先级查找：triple 名优先（精确匹配），其次通用名。
     let candidates = [
         resource_dir.join("node-x86_64-pc-windows-msvc.exe"),
-        resource_dir.join("node.exe"),
         exe_dir.join("node-x86_64-pc-windows-msvc.exe"),
+        resource_dir.join("node.exe"),
         exe_dir.join("node.exe"),
         resource_dir.join("binaries").join("node-x86_64-pc-windows-msvc.exe"),
-        resource_dir.join("binaries").join("node.exe"),
         exe_dir.join("binaries").join("node-x86_64-pc-windows-msvc.exe"),
+        resource_dir.join("binaries").join("node.exe"),
     ];
     for c in &candidates {
         if c.exists() {

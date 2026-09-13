@@ -40,7 +40,7 @@
       "../dsh-dist": "dsh-dist"
     },
     "windows": {
-      "webviewInstallMode": { "type": "offlineInstaller" }
+      "webviewInstallMode": { "type": "downloadBootstrapper" }
     }
   }
 }

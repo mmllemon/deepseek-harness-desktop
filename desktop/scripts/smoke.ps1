@@ -2,13 +2,13 @@
 .SYNOPSIS
   Hard acceptance Gate from doc section 12.6 (real Windows environment, item by item).
 .DESCRIPTION
-  Exit 0 only if all REQUIRED items pass; required (a)(b)(b2)(c)(e) failure => exit 1.
+  Exit 0 only if all REQUIRED items pass; required (a)(b)(b2)(c)(d)(e) failure => exit 1.
   (a) harness entry (dsh-dist/lib/bin.js) exists;
   (b) start `node <entry> web --port <free port>`, capture ready line http://127.0.0.1:<port> within timeout;
   (b2) native modules functional: node-pty can actually spawn a pty AND koffi loads in the deployed
        dsh-dist. This is the core reason SEA (Tier 1) was abandoned in favour of Tier 2 sidecar.
   (c) curl http://127.0.0.1:<port> returns HTML;
-  (d) if DEEPSEEK_API_KEY set, probe API (INFORMATIONAL only, never counts as pass/fail);
+  (d) if DEEPSEEK_API_KEY set, probe API (GATED — must succeed when key is present);
   (e) clean exit (terminate process);
   (f) print PASS/FAIL summary.
 .PARAMETER EntryPath
@@ -135,22 +135,28 @@ setTimeout(() => {
     Record "(c) curl returns HTML" $isHtml $detail
     if (-not $isHtml) { throw "Gate (c) failed. $detail" }
 
-    # (d) optional API reachability probe — INFORMATIONAL ONLY, never gates the result
+    # (d) API reachability probe — GATED when DEEPSEEK_API_KEY is set
     if ($env:DEEPSEEK_API_KEY) {
-        Write-Host "==> (d) DEEPSEEK_API_KEY set, running reachability probe (informational)"
+        Write-Host "==> (d) DEEPSEEK_API_KEY set, running API reachability probe (GATED)"
         try {
             $probe = & curl.exe -s -o $null -w "%{http_code}" -X POST "http://127.0.0.1:$port/api/chat" `
                 -H "Content-Type: application/json" `
                 -d '{"message":"ping"}' --max-time 15
-            Write-Host "    probe http_code=$probe (informational)"
-            Record "(d) API reachability probe (optional)" $true "http_code=$probe" $false
+            $apiOk = $probe -match '^2'
+            $detail = "http_code=$probe"
+            if (-not $apiOk) {
+                Write-Host "    WARNING: API returned non-2xx ($probe), gating failure"
+            }
+            Record "(d) API reachability probe" $apiOk $detail
+            if (-not $apiOk) { throw "Gate (d) failed: API probe returned $probe" }
         } catch {
-            Write-Host "    probe failed (skippable): $_"
-            Record "(d) API reachability probe (optional)" $true "skipped: $_" $false
+            Write-Host "    ERROR: probe failed: $_"
+            Record "(d) API reachability probe" $false "error: $_"
+            throw "Gate (d) failed: $_"
         }
     } else {
-        Write-Host "==> (d) DEEPSEEK_API_KEY not set, skipping API reachability probe (informational)"
-        Record "(d) API reachability probe (optional)" $true "skipped (no key)" $false
+        Write-Host "==> (d) DEEPSEEK_API_KEY not set, skipping API reachability probe"
+        Record "(d) API reachability probe" $true "skipped (no key)"
     }
 } catch {
     Write-Error "smoke failed: $_"
