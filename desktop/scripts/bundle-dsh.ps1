@@ -279,24 +279,50 @@ Materialize-DroppedPackages -HarnessDir $hDir -OutDir $outAbs
 Patch-DshSettings -OutDir $outAbs
 
 # STEP 6.5: Sync source-side native build artifacts into dsh-dist.
-# pnpm deploy copies packages from its store metadata, so post-install outputs that the earlier
-# `pnpm rebuild` wrote into node_modules (koffi build/Release/koffi.node, node-pty build/Release/*)
-# are silently dropped from the deploy. Without these, smoke gate (b2) cannot load the FFI/pty
-# natives. Mirror the source packages (junction follows the virtual store) into dsh-dist.
+#
+# Why BOTH the .node binary and the virtual-store lookup are required:
+#   - `pnpm rebuild` writes its output into the REAL package dir that lives inside the
+#     pnpm virtual store (.pnpm/<pkg>@<ver>/node_modules/<pkg>), NOT the hoisted top-level
+#     node_modules/<pkg> symlink. We must resolve the real dir, otherwise the sync is skipped.
+#   - `pnpm deploy --legacy` copies packages from store metadata, so the post-install outputs
+#     (koffi build/Release/koffi.node, node-pty build/Release/pty.node + conpty.dll, ...) are
+#     silently dropped from the deployed tree. Without re-copying them, smoke gate (b2) cannot
+#     load the FFI/pty natives.
+#   - A rebuild of the native addon against the shipped Node ABI is also required so the binary
+#     matches `node.exe`'s ABI (see STEP 3.5).
+#
+# Fix: resolve each package's real directory (top-level OR .pnpm virtual store) in BOTH the
+#   harness source and the deployed dsh-dist, then mirror the source package (build artifacts
+#   included) over the deployed one. Verification: smoke gate (b2) loads koffi + spawns node-pty.
+function Resolve-RealPackage {
+    param([string]$Base, [string]$Name)
+    # 1) top-level hoisted node_modules/<name> (a symlink in a pnpm workspace)
+    $top = Join-Path $Base "node_modules/$Name"
+    if (Test-Path -LiteralPath $top) { return (Resolve-Path -LiteralPath $top).Path }
+    # 2) virtual store: .pnpm/<name>@<version>/node_modules/<name>  (scoped names use '+' => '<scope>+<name>@...')
+    $store = Join-Path $Base "node_modules/.pnpm"
+    if (Test-Path -LiteralPath $store) {
+        $dirs = Get-ChildItem -LiteralPath $store -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*+$Name@*" -or $_.Name -like "$Name@*" }
+        foreach ($d in ($dirs | Sort-Object Name -Descending)) {
+            $cand = Join-Path $d.FullName "node_modules/$Name"
+            if (Test-Path -LiteralPath $cand) { return (Resolve-Path -LiteralPath $cand).Path }
+        }
+    }
+    return $null
+}
+
 Write-Host "==> native-build sync into dsh-dist"
 foreach ($m in @('koffi', 'node-pty')) {
-    $srcPkg = Join-Path $hDir "node_modules/$m"
-    $dstPkg = Join-Path $outAbs "node_modules/$m"
-    if (-not (Test-Path $dstPkg)) { Write-Error "$m missing from dsh-dist after deploy"; exit 1 }
-    if (-not (Test-Path $srcPkg)) { Write-Warning "  $m not present in source node_modules -- skip sync"; continue }
-    $copied = 0
-    Get-ChildItem -LiteralPath $srcPkg -Force -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $dstPkg $_.Name) -Recurse -Force -ErrorAction SilentlyContinue
-        $copied++
-    }
-    # sanity: ensure at least one build artifact binding exists
-    $nativeOk = (Get-ChildItem -Path $dstPkg -Recurse -Include '*.node', '*.dll' -File -ErrorAction SilentlyContinue | Measure-Object).Count
-    Write-Host "   native-synced $m -> $dstPkg ($copied entries, $nativeOk native file(s))"
+    $srcPkg = Resolve-RealPackage -Base $hDir -Name $m
+    $dstPkg = Resolve-RealPackage -Base $outAbs -Name $m
+    if (-not $dstPkg) { Write-Error "$m missing from dsh-dist after deploy"; exit 1 }
+    if (-not $srcPkg) { Write-Warning "  $m build artifacts not found in source store -- skip sync"; continue }
+    # Mirror the whole source package (JS + built binaries) over the deployed one to guarantee
+    # the .node/.dll land beside their loader. Same version/lockfile => safe to overwrite.
+    Copy-Item -LiteralPath $srcPkg -Destination $dstPkg -Recurse -Force -ErrorAction Stop
+    $nativeOk = (Get-ChildItem -LiteralPath $dstPkg -Recurse -Include '*.node', '*.dll' -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    Write-Host "   native-synced $m <- $srcPkg -> $dstPkg ($nativeOk native file(s))"
 }
 
 # ---------------------------------------------------------------------------
