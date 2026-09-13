@@ -347,7 +347,7 @@ async fn retry_with_backoff(
     uri: &Uri,
     headers: &HeaderMap,
     body: Bytes,
-    orig_cookie: &str,
+    _orig_cookie: &str,
     is_root: bool,
     theme: &Option<String>,
 ) -> Response {
@@ -374,7 +374,7 @@ async fn retry_with_backoff(
         if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
             let mut cache = s.agent_cookie.lock().unwrap();
             cache.set(c.clone(), Instant::now());
-            match forward_upstream(&s, method.clone(), uri, headers, body.clone(), &c).await {
+            match forward_upstream(s, method.clone(), uri, headers, body.clone(), &c).await {
                 Ok(r) => {
                     if r.status() != StatusCode::UNAUTHORIZED {
                         return transform_upstream(r, theme, None, is_root).await;
