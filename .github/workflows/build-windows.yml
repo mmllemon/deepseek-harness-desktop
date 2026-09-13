@@ -94,6 +94,16 @@ jobs:
             Write-Host "staged node sidecar: $dest ($([math]::Round((Get-Item $dest).Length/1MB,2)) MB)"
           }
 
+      # tauri-build 同样会校验 bundle.resources 的 `../dsh-dist`（相对 src-tauri 即 D:\wb\dsh-dist）
+      # 是否存在于当前 checkout。该目录由 build-harness job 产出，本 job 只做编译检查，
+      # 占位目录即可通过存在性校验（真实 dsh-dist 由 build-windows 消费）。
+      - name: Create placeholder dsh-dist dir (resource path check)
+        shell: pwsh
+        working-directory: D:\wb
+        run: |
+          New-Item -ItemType Directory -Force -Path (Join-Path $PWD "dsh-dist") | Out-Null
+          Write-Host "placeholder dsh-dist ready"
+
       - name: cargo check (fast compile check)
         shell: pwsh
         working-directory: D:\wb\src-tauri
