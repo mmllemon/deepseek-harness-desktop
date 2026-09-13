@@ -148,7 +148,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dsh-dist
-          path: dsh-dist/
+          # bundle-dsh.ps1 产出于 D:\wb\dsh-dist；upload-artifact 的 path 相对 $GITHUB_WORKSPACE
+          # （relocate 前的 D:\a\...），必须用绝对路径才能命中，否则 "No files found"。
+          path: D:\wb/dsh-dist/
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -181,7 +183,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: dsh-dist
-          path: dsh-dist/
+          # 下载/解压到 D:\wb\dsh-dist（源码已 relocate，后续步骤在 D:\wb 运行）；
+          # download-artifact 的 path 相对 $GITHUB_WORKSPACE，需绝对路径与上传侧一致。
+          path: D:\wb/dsh-dist/
 
       - name: npm ci (frontend deps)
         run: npm ci
@@ -240,7 +244,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: dsh-dist
-          path: dsh-dist/
+          # 与 build-frontend 一致：解压到 D:\wb\dsh-dist，供 Tauri 打包/smoke 使用。
+          path: D:\wb/dsh-dist/
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
