@@ -189,11 +189,11 @@ export default function App() {
             return next
           })
         }),
-        listenReady(() => {
+        listenReady((ready) => {
           setOffline('')
           setOfflineDetail(null)
           resetReconnectCount()
-          navigate(/* url resolved by event payload below */)
+          navigate(ready.proxyUrl)
         }),
         listenState((s) =>
           setStatus({
@@ -273,8 +273,8 @@ export default function App() {
       setOffline(`重试失败：${String(e)}`)
       setOfflineDetail({
         message: String(e),
-        agentPort: st?.agentPort ?? 0,
-        proxyUrl: st?.proxyUrl ?? '',
+        agentPort: status?.agentPort ?? 0,
+        proxyUrl: status?.proxyUrl ?? '',
         reconnectCount: count,
       })
     }
