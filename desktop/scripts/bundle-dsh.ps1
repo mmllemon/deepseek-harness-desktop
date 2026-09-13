@@ -325,47 +325,75 @@ foreach ($m in @('koffi', 'node-pty')) {
     Write-Host "   native-synced $m <- $srcPkg -> $dstPkg ($nativeOk native file(s))"
 }
 
-# koffi 3.x loads its native binary from ONE of two locations:
-#   (A) the per-arch optionalDependency sub-package `@koromix/koffi-<platform>-<arch>`
-#       (resolved as `node_modules/@koromix/koffi-<platform>-<arch>` relative to the koffi pkg)
-#   (B) a local build output `<koffi>/build/koffi/<triplet>/koffi.node`
-# `pnpm deploy --prod` drops BOTH (sub-pkg filtered out as optional; build/ stripped by deploy).
-# Fix: (A) re-materialize the @koromix sub-package from the source store into dsh-dist's top-level
-#   node_modules so koffi's `../../../@koromix/...` lookup succeeds, AND (B) re-run koffi's own
-#   cnoke install script INSIDE the deployed pkg dir as the authoritative binary generator.
-$archPkg = "koromix/koffi-$($null -ne [System.Runtime.InteropServices.RuntimeInformation]::OSPlatform)" # placeholder
-$platform = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
-$arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLower()
-$osName = if ([System.Runtime.InteropServices.RuntimeInformation]::OSDescription -match 'Windows') { 'win32' }
-           elseif ($platform -match 'Darwin') { 'darwin' } elseif ($platform -match 'Linux') { 'linux' }
-           else { 'unknown' }
-$koffiArchSub = "@koromix/koffi-$osName-$arch"
-Write-Host "==> sync $koffiArchSub (koffi per-arch native sub-package) into dsh-dist"
-$srcSub = Resolve-RealPackage -Base $hDir -Name $koffiArchSub
-$dstSub = Join-Path $outAbs "node_modules/$koffiArchSub"
-if ($srcSub) {
-    New-Item -ItemType Directory -Force -Path (Split-Path $dstSub) | Out-Null
-    Copy-Item -LiteralPath $srcSub -Destination $dstSub -Recurse -Force -ErrorAction Stop
-    $subNative = (Get-ChildItem -LiteralPath $dstSub -Recurse -Include '*.node', '*.dll', '*.dylib', '*.so' -File -ErrorAction SilentlyContinue | Measure-Object).Count
-    Write-Host "   synced $koffiArchSub -> $dstSub ($subNative binary file(s))"
-} else {
-    Write-Warning "  $koffiArchSub not found in source store -- will rely on in-place cnoke build"
-}
-# (B) authoritative in-place native build for koffi (cnoke downloads/compiles .node into build/koffi)
-$koffiDst = Resolve-RealPackage -Base $outAbs -Name koffi
-$koffiHasNative = (Get-ChildItem -LiteralPath $koffiDst -Recurse -Include '*.node' -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
-if (-not $koffiHasNative -and (Test-Path (Join-Path $koffiDst 'cnoke.cjs'))) {
-    Write-Host "==> running koffi cnoke install inside dsh-dist (authoritative native build)"
-    Push-Location $koffiDst
-    try {
-        & node ./cnoke.cjs -P . -D src/koffi --prebuild --release
-        if ($LASTEXITCODE -ne 0) { throw "koffi cnoke build failed (exit $LASTEXITCODE)" }
-    } finally {
-        Pop-Location
+# koffi 3.x ships its native binary in the per-arch optionalDependency sub-package
+# `@koromix/koffi-<platform>-<arch>`, which koffi's index.cjs loadDynamic() resolves as
+# `node_modules/@koromix/koffi-<platform>-<arch>` (a validation failing with
+# "Cannot find the native Koffi module; did you bundle it correctly?" when it is absent).
+#
+# Why `pnpm deploy --prod` drops it:
+#   - the sub-package is an optionalDependency of koffi, filtered out by --prod;
+#   - the fallback build output `<koffi>/build/koffi/<triplet>/koffi.node` is stripped by deploy;
+#   - re-running koffi's cnoke install in-place needs the node-api headers that ship with
+#     `pnpm install` (not present after deploy), so it silently produces 0 .node files.
+#
+# Fix (authoritative & deterministic): fetch the SAME-version prebuilt sub-package for the
+#   current OS/arch straight from the npm registry and materialize it at top-level
+#   `node_modules/@koromix/koffi-<platform>-<arch>`. Its tiny index.js just require()s
+#   `<triplet>/koffi.node` (e.g. win32_x64/koffi.node). The sub-package version MUST equal the
+#   koffi main package version or koffi throws "Mismatched native Koffi modules" — derive it from
+#   the deployed koffi package.json rather than hard-coding.
+# Verification: smoke gate (b2) require()s koffi; success is only possible if this .node loads.
+function Install-KoffiSubPackage {
+    param([string]$OutDir, [string]$SubName, [string]$Version)
+    $dst = Join-Path $OutDir "node_modules/$SubName"
+    # idempotent fast path: a native binary already present (source-store sync / prior run)
+    $alreadyNative = (Get-ChildItem -LiteralPath $dst -Recurse -Include '*.node', '*.dll', '*.dylib', '*.so' -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+    if ($alreadyNative) {
+        Write-Host "   $SubName already present with a native binary -- skip registry fetch"
+        return
     }
-    $koffiNative2 = (Get-ChildItem -LiteralPath $koffiDst -Recurse -Include '*.node' -File -ErrorAction SilentlyContinue | Measure-Object).Count
-    Write-Host "   koffi native after in-place build: $koffiNative2 .node file(s)"
+    $short = $SubName.Substring($SubName.IndexOf('/') + 1)
+    $tgz = Join-Path $env:TEMP ("$short-$Version.tgz")
+    $extract = Join-Path $env:TEMP ("$short-$Version-extract")
+    if (Test-Path $tgz)     { Remove-Item -Force $tgz }
+    if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    try {
+        Write-Host "==> downloading $SubName@$Version from npm registry"
+        Invoke-WebRequest -Uri "https://registry.npmjs.org/$SubName/-/$short-$Version.tgz" -OutFile $tgz -UseBasicParsing
+        tar -xzf $tgz -C $extract
+        $pkgDir = Join-Path $extract 'package'
+        if (-not (Test-Path $pkgDir)) { throw "registry tarball for $SubName@$Version has no package/ root" }
+        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+        if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
+        Copy-Item -Recurse -Force $pkgDir $dst
+    } finally {
+        Remove-Item -Force $tgz -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $extract -ErrorAction SilentlyContinue
+    }
+    $n = (Get-ChildItem -LiteralPath $dst -Recurse -Include '*.node', '*.dll', '*.dylib', '*.so' -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    if ($n -eq 0) { Write-Error "$SubName@$Version downloaded but contains no native binary"; exit 1 }
+    Write-Host "   materialized $SubName@$Version -> $dst ($n native file(s))"
 }
+
+# platform triplet matching koffi's @koromix naming (<platform>-<arch>, e.g. win32-x64)
+$platform = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLower()
+$osName = if ($platform -match 'Windows') { 'win32' }
+          elseif ($platform -match 'Darwin') { 'darwin' }
+          elseif ($platform -match 'Linux') { 'linux' }
+          else { 'unknown' }
+$koffiArchSub = "@koromix/koffi-$osName-$arch"
+
+# sub-package version MUST equal the koffi main package version
+$koffiDst = Resolve-RealPackage -Base $outAbs -Name koffi
+$koffiVer = (Get-Content (Join-Path $koffiDst 'package.json') -Raw | ConvertFrom-Json).version
+Write-Host "==> materializing koffi native sub-package $koffiArchSub@$koffiVer into dsh-dist"
+Install-KoffiSubPackage -OutDir $outAbs -SubName $koffiArchSub -Version $koffiVer
+
+$koffiNative = Get-ChildItem (Join-Path $outAbs "node_modules/$koffiArchSub") -Recurse -Include '*.node', '*.dll', '*.dylib', '*.so' -File -ErrorAction SilentlyContinue
+Write-Host "   $koffiArchSub resident native file(s) in dsh-dist: $($koffiNative.Count)"
+if ($koffiNative.Count -eq 0) { Write-Error "koffi native binary still missing after install -- smoke gate (b2) will fail"; exit 1 }
 
 # ---------------------------------------------------------------------------
 # Verification gates
