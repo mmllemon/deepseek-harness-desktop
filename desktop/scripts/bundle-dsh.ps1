@@ -325,6 +325,48 @@ foreach ($m in @('koffi', 'node-pty')) {
     Write-Host "   native-synced $m <- $srcPkg -> $dstPkg ($nativeOk native file(s))"
 }
 
+# koffi 3.x loads its native binary from ONE of two locations:
+#   (A) the per-arch optionalDependency sub-package `@koromix/koffi-<platform>-<arch>`
+#       (resolved as `node_modules/@koromix/koffi-<platform>-<arch>` relative to the koffi pkg)
+#   (B) a local build output `<koffi>/build/koffi/<triplet>/koffi.node`
+# `pnpm deploy --prod` drops BOTH (sub-pkg filtered out as optional; build/ stripped by deploy).
+# Fix: (A) re-materialize the @koromix sub-package from the source store into dsh-dist's top-level
+#   node_modules so koffi's `../../../@koromix/...` lookup succeeds, AND (B) re-run koffi's own
+#   cnoke install script INSIDE the deployed pkg dir as the authoritative binary generator.
+$archPkg = "koromix/koffi-$($null -ne [System.Runtime.InteropServices.RuntimeInformation]::OSPlatform)" # placeholder
+$platform = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+$arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLower()
+$osName = if ([System.Runtime.InteropServices.RuntimeInformation]::OSDescription -match 'Windows') { 'win32' }
+           elseif ($platform -match 'Darwin') { 'darwin' } elseif ($platform -match 'Linux') { 'linux' }
+           else { 'unknown' }
+$koffiArchSub = "@koromix/koffi-$osName-$arch"
+Write-Host "==> sync $koffiArchSub (koffi per-arch native sub-package) into dsh-dist"
+$srcSub = Resolve-RealPackage -Base $hDir -Name $koffiArchSub
+$dstSub = Join-Path $outAbs "node_modules/$koffiArchSub"
+if ($srcSub) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $dstSub) | Out-Null
+    Copy-Item -LiteralPath $srcSub -Destination $dstSub -Recurse -Force -ErrorAction Stop
+    $subNative = (Get-ChildItem -LiteralPath $dstSub -Recurse -Include '*.node', '*.dll', '*.dylib', '*.so' -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    Write-Host "   synced $koffiArchSub -> $dstSub ($subNative binary file(s))"
+} else {
+    Write-Warning "  $koffiArchSub not found in source store -- will rely on in-place cnoke build"
+}
+# (B) authoritative in-place native build for koffi (cnoke downloads/compiles .node into build/koffi)
+$koffiDst = Resolve-RealPackage -Base $outAbs -Name koffi
+$koffiHasNative = (Get-ChildItem -LiteralPath $koffiDst -Recurse -Include '*.node' -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+if (-not $koffiHasNative -and (Test-Path (Join-Path $koffiDst 'cnoke.cjs'))) {
+    Write-Host "==> running koffi cnoke install inside dsh-dist (authoritative native build)"
+    Push-Location $koffiDst
+    try {
+        & node ./cnoke.cjs -P . -D src/koffi --prebuild --release
+        if ($LASTEXITCODE -ne 0) { throw "koffi cnoke build failed (exit $LASTEXITCODE)" }
+    } finally {
+        Pop-Location
+    }
+    $koffiNative2 = (Get-ChildItem -LiteralPath $koffiDst -Recurse -Include '*.node' -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    Write-Host "   koffi native after in-place build: $koffiNative2 .node file(s)"
+}
+
 # ---------------------------------------------------------------------------
 # Verification gates
 # ---------------------------------------------------------------------------
