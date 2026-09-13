@@ -399,43 +399,82 @@ Write-Host "   $koffiArchSub resident native file(s) in dsh-dist: $($koffiNative
 if ($koffiNative.Count -eq 0) { Write-Error "koffi native binary still missing after install -- smoke gate (b2) will fail"; exit 1 }
 
 # ---------------------------------------------------------------------------
-# STEP 6.6: Sync hoisted-only runtime deps dropped by `pnpm deploy --prod`
+# STEP 6.6: Rebuild the runtime dependency closure dropped by `pnpm deploy --prod`
 # ---------------------------------------------------------------------------
-# Why: `pnpm deploy --prod` materializes only the deploy ENTRY's direct closure. Pure-JS packages
-#   that the workspace resolves purely via TOP-LEVEL hoisting are NOT part of that closure and get
-#   dropped, then the harness ESM loader throws `ERR_MODULE_NOT_FOUND`:
-#   - `resolve.exports`: direct dependency of @deepseek-ai/dsh-app-boot, imported when the harness
-#     web server starts (smoke gate (b) "harness exited before ready").
-#   - `zod` / `ws`: dynamically imported by the preset plugins @deepseek-ai/dsh-typert-registry
-#     (zod) and @deepseek-ai/dsh-api-gateway (ws) at plugin-load time; the plugins are optional
-#     dependencies of the CLI, so the --prod closure omits both (smoke gate (b) ERR_MODULE_NOT_FOUND).
-# Fix: mirror each such package's REAL dir from the harness source store into dsh-dist's TOP-LEVEL
-#   node_modules so Node's ancestor-directory walk resolves it. Doesn't need the .pnpm scaffolding
-#   that the deploy prunes. Verification: smoke gate (b) starts the harness web server; any dropped
-#   dependency aborts with ERR_MODULE_NOT_FOUND, so the gate passes only when the closure is complete.
-function Sync-MissingRuntimeDeps {
-    param([string]$HarnessDir, [string]$OutDir, [string[]]$Names)
-    foreach ($Name in $Names) {
-        $dstTop = Join-Path $OutDir "node_modules/$Name"
-        if (Test-Path (Join-Path $dstTop 'package.json')) { continue }
-        $srcReal = Resolve-RealPackage -Base $HarnessDir -Name $Name
-        if (-not $srcReal) { Write-Error "runtime dep $Name missing from both source store and dsh-dist"; exit 1 }
-        New-Item -ItemType Directory -Force -Path (Split-Path $dstTop) | Out-Null
-        Copy-Item -LiteralPath $srcReal -Destination $dstTop -Recurse -Force -ErrorAction Stop
-        Write-Host "   synced runtime dep $Name <- $srcReal -> $dstTop"
+# Why: `pnpm deploy --prod` materializes only the deploy ENTRY's direct closure. The harness
+#   `web` profile dynamically imports a broad set of workspace plugins (@deepseek-ai/dsh-*),
+#   and each plugin's OWN deps are not part of the CLI closure -- they resolve via the source
+#   workspace's top-level hoisting / virtual store, so the deploy silently drops them and the
+#   harness ESM loader aborts with ERR_MODULE_NOT_FOUND when loading each loader entry
+#   (observed in smoke gate (b): chokidar, sharp, compression, ipaddr.js, fflate, open,
+#   eventsource-parser, @earendil-works/pi-ai, @opentelemetry/sdk-logs, ...). A hard-coded
+#   package list is whack-a-mole; the fix must walk the closure.
+# Fix: BFS over every package ALREADY present in dsh-dist (workspace plugins + their deps).
+#   For each dependency (dependencies + peerDependencies + optionalDependencies) that is
+#   missing from dsh-dist, resolve its REAL dir in the harness source store and mirror it into
+#   dsh-dist's TOP-LEVEL node_modules, then recurse into the newly copied package. Optional
+#   deps that the source store never materialized for this platform (e.g. other-OS native
+#   binaries) are skipped -- Node only loads the platform-matching ones.
+# Verification: smoke gate (b) starts the harness web server; any dropped dependency aborts
+#   with ERR_MODULE_NOT_FOUND, so the gate passes only when the closure is complete.
+function Sync-PluginDependencyClosure {
+    param([string]$HarnessDir, [string]$OutDir)
+    $outNM = Join-Path $OutDir 'node_modules'
+    if (-not (Test-Path -LiteralPath $outNM)) { return }
+    $queue = New-Object System.Collections.Generic.Queue[string]
+    $seen = @{}
+    foreach ($d in (Get-ChildItem -LiteralPath $outNM -Directory -ErrorAction SilentlyContinue)) {
+        if ($d.Name -like '@*') {
+            foreach ($sub in (Get-ChildItem -LiteralPath $d.FullName -Directory -ErrorAction SilentlyContinue)) {
+                $queue.Enqueue(($d.Name + '/' + $sub.Name))
+            }
+        } else {
+            $queue.Enqueue($d.Name)
+        }
     }
+    while ($queue.Count -gt 0) {
+        $pkg = $queue.Dequeue()
+        if ($seen.ContainsKey($pkg)) { continue }
+        $seen[$pkg] = $true
+        $pkgJson = Join-Path $outNM ($pkg + '/package.json')
+        if (-not (Test-Path -LiteralPath $pkgJson)) { continue }
+        $pj = $null
+        try { $pj = Get-Content -LiteralPath $pkgJson -Raw | ConvertFrom-Json } catch { continue }
+        $depMap = @{}
+        foreach ($section in @('dependencies', 'peerDependencies', 'optionalDependencies')) {
+            $sec = $pj.PSObject.Properties[$section]
+            if ($sec -and $sec.Value) {
+                foreach ($prop in $sec.Value.PSObject.Properties) { $depMap[$prop.Name] = $prop.Value }
+            }
+        }
+        foreach ($depName in $depMap.Keys) {
+            $depTop = Join-Path $outNM $depName
+            if (-not (Test-Path -LiteralPath (Join-Path $depTop 'package.json'))) {
+                $srcReal = Resolve-RealPackage -Base $HarnessDir -Name $depName
+                if ($srcReal) {
+                    New-Item -ItemType Directory -Force -Path (Split-Path $depTop) | Out-Null
+                    Copy-Item -LiteralPath $srcReal -Destination $depTop -Recurse -Force -ErrorAction Stop
+                    Write-Host "   closure-synced $depName <- $srcReal"
+                } else {
+                    Write-Warning "   closure dep $depName not resolvable in source store (platform-specific optional?) -- skip"
+                }
+            }
+            $queue.Enqueue($depName)
+        }
+    }
+    Write-Host "   plugin dependency closure sync done ($($seen.Count) packages scanned)"
 }
-Write-Host "==> syncing hoisted-only runtime deps into dsh-dist"
-Sync-MissingRuntimeDeps -HarnessDir $hDir -OutDir $outAbs -Names @('resolve.exports', 'zod', 'ws')
+Write-Host "==> syncing plugin runtime dependency closure into dsh-dist"
+Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs
 
 # ---------------------------------------------------------------------------
 # Verification gates
 # ---------------------------------------------------------------------------
 Write-Host "==> running verification gates"
-foreach ($m in @('node-pty', 'koffi', 'resolve.exports', 'zod', 'ws')) {
+foreach ($m in @('node-pty', 'koffi', 'sharp', 'chokidar', 'resolve.exports')) {
     $mp = Join-Path $outAbs "node_modules/$m"
     if (-not (Test-Path (Join-Path $mp 'package.json'))) {
-        Write-Error "$m missing/empty in dsh-dist after pnpm deploy -- this breaks native-module features (terminal/FFI) or the harness web server (ESM dep). Check bundle-dsh native-module promotion / runtime-dep sync."
+        Write-Error "$m missing/empty in dsh-dist after pnpm deploy -- this breaks native-module features (terminal/FFI/image) or the harness web server (ESM dep). Check bundle-dsh native-module promotion / runtime-dep closure sync."
         exit 1
     }
     Write-Host "   verified native/runtime module present: $m"
