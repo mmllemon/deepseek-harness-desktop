@@ -278,6 +278,27 @@ Write-Host "==> dsh-dist pruned"
 Materialize-DroppedPackages -HarnessDir $hDir -OutDir $outAbs
 Patch-DshSettings -OutDir $outAbs
 
+# STEP 6.5: Sync source-side native build artifacts into dsh-dist.
+# pnpm deploy copies packages from its store metadata, so post-install outputs that the earlier
+# `pnpm rebuild` wrote into node_modules (koffi build/Release/koffi.node, node-pty build/Release/*)
+# are silently dropped from the deploy. Without these, smoke gate (b2) cannot load the FFI/pty
+# natives. Mirror the source packages (junction follows the virtual store) into dsh-dist.
+Write-Host "==> native-build sync into dsh-dist"
+foreach ($m in @('koffi', 'node-pty')) {
+    $srcPkg = Join-Path $hDir "node_modules/$m"
+    $dstPkg = Join-Path $outAbs "node_modules/$m"
+    if (-not (Test-Path $dstPkg)) { Write-Error "$m missing from dsh-dist after deploy"; exit 1 }
+    if (-not (Test-Path $srcPkg)) { Write-Warning "  $m not present in source node_modules -- skip sync"; continue }
+    $copied = 0
+    Get-ChildItem -LiteralPath $srcPkg -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $dstPkg $_.Name) -Recurse -Force -ErrorAction SilentlyContinue
+        $copied++
+    }
+    # sanity: ensure at least one build artifact binding exists
+    $nativeOk = (Get-ChildItem -Path $dstPkg -Recurse -Include '*.node', '*.dll' -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    Write-Host "   native-synced $m -> $dstPkg ($copied entries, $nativeOk native file(s))"
+}
+
 # ---------------------------------------------------------------------------
 # Verification gates
 # ---------------------------------------------------------------------------
