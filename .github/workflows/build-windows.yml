@@ -186,6 +186,9 @@ jobs:
           # （relocate 前的 D:\a\...），必须用绝对路径才能命中，否则 "No files found"。
           path: D:\wb/dsh-dist/
           if-no-files-found: error
+          # upload-artifact@v4 默认排除隐藏文件（以 . 开头），会丢掉 pi-ai 的
+          # .manifest.json（smoke 加载必需），必须显式包含。
+          include-hidden-files: true
 
   # ---------------------------------------------------------------------------
   # Job 3: Frontend + Tauri build (depends on harness bundle)

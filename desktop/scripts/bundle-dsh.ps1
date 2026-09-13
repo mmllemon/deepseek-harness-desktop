@@ -295,13 +295,16 @@ Patch-DshSettings -OutDir $outAbs
 #   harness source and the deployed dsh-dist, then mirror the source package (build artifacts
 #   included) over the deployed one. Verification: smoke gate (b2) loads koffi + spawns node-pty.
 function Resolve-RealPackage {
-    param([string]$Base, [string]$Name)
+    param([string]$Base, [string]$Name, [hashtable]$Index = $null)
     # 1) top-level hoisted node_modules/<name> (a symlink in a pnpm workspace)
     $top = Join-Path $Base "node_modules/$Name"
     if (Test-Path -LiteralPath $top) { return (Resolve-Path -LiteralPath $top).Path }
-    # 2) virtual store: .pnpm/<name>@<version>/node_modules/<name>
-    #    scoped names use '+' in the store dir ('@scope+<name>@<ver>') while the package specifier
-    #    uses '/', so normalize '/' -> '+' before matching ('@deepseek-ai/dsh-x' -> '@deepseek-ai+dsh-x').
+    # 2) content index over .pnpm virtual store: pnpm renames over-long store dirs to
+    #    '<truncated-name>_<hash>' where the truncation can cut INSIDE the package name
+    #    (e.g. '@opentelemetry+exporter-log_8841f7...' for exporter-logs-otlp-http), so
+    #    name-pattern matching is unreliable -- match on each package.json's real "name" instead.
+    if ($Index -and $Index.ContainsKey($Name)) { return $Index[$Name] }
+    # 3) fallback: pattern match the store dir (handles un-truncated dirs when no index passed)
     $store = Join-Path $Base "node_modules/.pnpm"
     if (Test-Path -LiteralPath $store) {
         $match = $Name -replace '/', '+'
@@ -315,9 +318,39 @@ function Resolve-RealPackage {
     return $null
 }
 
+# Build a package-name -> real-dir map over a pnpm virtual store by reading each package.json.
+# Resolve-RealPackage falls back to this because pnpm hashes over-long store directory names.
+function Build-VirtualStoreIndex {
+    param([string]$Base)
+    $map = @{}
+    $store = Join-Path $Base 'node_modules/.pnpm'
+    if (-not (Test-Path -LiteralPath $store)) { return $map }
+    foreach ($d in (Get-ChildItem -LiteralPath $store -Directory -ErrorAction SilentlyContinue)) {
+        $inner = Join-Path $d.FullName 'node_modules'
+        if (-not (Test-Path -LiteralPath $inner)) { continue }
+        foreach ($nm in (Get-ChildItem -LiteralPath $inner -Directory -ErrorAction SilentlyContinue)) {
+            $cands = if ($nm.Name -like '@*') { Get-ChildItem -LiteralPath $nm.FullName -Directory -ErrorAction SilentlyContinue } else { @($nm) }
+            foreach ($c in $cands) {
+                $pj = Join-Path $c.FullName 'package.json'
+                if (-not (Test-Path -LiteralPath $pj)) { continue }
+                try { $p = Get-Content -LiteralPath $pj -Raw | ConvertFrom-Json } catch { continue }
+                if ($p.PSObject.Properties['name'] -and $p.name) { $map[$p.name] = $c.FullName }
+            }
+        }
+    }
+    return $map
+}
+
+# Build the source-side virtual-store name index ONCE; every Resolve-RealPackage on the harness
+# dir passes it, because pnpm hashes over-long store dir names (truncation cuts inside the
+# package name) and only each package.json's real "name" field is a reliable lookup key.
+Write-Host "==> building pnpm virtual-store index from harness source"
+$vsIndex = Build-VirtualStoreIndex -Base $hDir
+Write-Host "   virtual-store index entries: $($vsIndex.Count)"
+
 Write-Host "==> native-build sync into dsh-dist"
 foreach ($m in @('koffi', 'node-pty')) {
-    $srcPkg = Resolve-RealPackage -Base $hDir -Name $m
+    $srcPkg = Resolve-RealPackage -Base $hDir -Name $m -Index $vsIndex
     $dstPkg = Resolve-RealPackage -Base $outAbs -Name $m
     if (-not $dstPkg) { Write-Error "$m missing from dsh-dist after deploy"; exit 1 }
     if (-not $srcPkg) { Write-Warning "  $m build artifacts not found in source store -- skip sync"; continue }
@@ -418,7 +451,7 @@ if ($koffiNative.Count -eq 0) { Write-Error "koffi native binary still missing a
 # Verification: smoke gate (b) starts the harness web server; any dropped dependency aborts
 #   with ERR_MODULE_NOT_FOUND, so the gate passes only when the closure is complete.
 function Sync-PluginDependencyClosure {
-    param([string]$HarnessDir, [string]$OutDir)
+    param([string]$HarnessDir, [string]$OutDir, [hashtable]$Index = $null)
     $outNM = Join-Path $OutDir 'node_modules'
     if (-not (Test-Path -LiteralPath $outNM)) { return }
     $queue = New-Object System.Collections.Generic.Queue[string]
@@ -450,7 +483,7 @@ function Sync-PluginDependencyClosure {
         foreach ($depName in $depMap.Keys) {
             $depTop = Join-Path $outNM $depName
             if (-not (Test-Path -LiteralPath (Join-Path $depTop 'package.json'))) {
-                $srcReal = Resolve-RealPackage -Base $HarnessDir -Name $depName
+                $srcReal = Resolve-RealPackage -Base $HarnessDir -Name $depName -Index $Index
                 if ($srcReal) {
                     New-Item -ItemType Directory -Force -Path (Split-Path $depTop) | Out-Null
                     Copy-Item -LiteralPath $srcReal -Destination $depTop -Recurse -Force -ErrorAction Stop
@@ -465,7 +498,30 @@ function Sync-PluginDependencyClosure {
     Write-Host "   plugin dependency closure sync done ($($seen.Count) packages scanned)"
 }
 Write-Host "==> syncing plugin runtime dependency closure into dsh-dist"
-Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs
+Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs -Index $vsIndex
+
+# ---------------------------------------------------------------------------
+# STEP 6.7: Strip residual .pnpm virtual-store structure and verify the deployed
+#   tree is fully materialized. A symlink/junction left inside dsh-dist would
+#   dangle once the source checkout is gone at install time; the artifact must be
+#   self-contained real files only.
+# Verification: this step fails the build if any reparse point remains in dsh-dist.
+# ---------------------------------------------------------------------------
+Write-Host "==> stripping .pnpm virtual store from dsh-dist"
+$pnpmStore = Join-Path $outAbs 'node_modules/.pnpm'
+if (Test-Path -LiteralPath $pnpmStore) {
+    Remove-Item -LiteralPath $pnpmStore -Recurse -Force
+    Write-Host "   removed $pnpmStore"
+} else {
+    Write-Host "   no .pnpm virtual store present (clean deploy)"
+}
+$linkCount = (Get-ChildItem -LiteralPath (Join-Path $outAbs 'node_modules') -Recurse -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.LinkType -or ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } | Measure-Object).Count
+if ($linkCount -gt 0) {
+    Write-Error "dsh-dist still contains $linkCount symlink/junction(s) -- Tier 2 bundle must be self-contained real files"
+    exit 1
+}
+Write-Host "   verified: no symlinks/junctions remain in dsh-dist"
 
 # ---------------------------------------------------------------------------
 # Verification gates
@@ -479,6 +535,16 @@ foreach ($m in @('node-pty', 'koffi', 'sharp', 'chokidar', 'resolve.exports')) {
     }
     Write-Host "   verified native/runtime module present: $m"
 }
+
+# pi-ai ships a hidden data manifest (.manifest.json) that its loader requires() at runtime.
+# upload-artifact@v4 drops dot-files by default, so CI MUST set include-hidden-files: true on
+# the dsh-dist artifact; this gate fails the bundle early if the file is missing locally.
+$piAiManifest = Join-Path $outAbs "node_modules/@earendil-works/pi-ai/dist/providers/data/.manifest.json"
+if (-not (Test-Path -LiteralPath $piAiManifest)) {
+    Write-Error "pi-ai hidden manifest missing: $piAiManifest -- ensure the package synced and CI uploads hidden files (include-hidden-files: true)"
+    exit 1
+}
+Write-Host "   verified pi-ai hidden manifest present: $piAiManifest"
 
 $entry = Join-Path $outAbs "lib/bin.js"
 if (-not (Test-Path $entry)) { Write-Error "deploy produced no entry: $entry"; exit 1 }
