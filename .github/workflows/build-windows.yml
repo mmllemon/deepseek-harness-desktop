@@ -52,7 +52,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: D:\wb\src-tauri
-          key: ci-${{ github.sha }}
+          key: ci-rustcheck-${{ github.sha }}
 
       - name: Force recompile (defeat stale rust-cache)
         shell: pwsh
@@ -223,7 +223,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: D:\wb\src-tauri
-          key: ci-${{ github.sha }}
+          key: ci-buildwin-${{ github.sha }}
 
       - name: Force recompile (defeat stale rust-cache)
         shell: pwsh

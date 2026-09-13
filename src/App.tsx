@@ -291,7 +291,8 @@ export default function App() {
     ?.line ?? ''
 
   return (
-    <div className="app">
+    <ErrorBoundary>
+      <div className="app">
       <header className="topbar">
         <span className="brand">DeepSeek Harness</span>
         <span className={`badge badge-${status?.state ?? 'stopped'}`}>
@@ -379,6 +380,7 @@ export default function App() {
       )}
 
       {settingsOpen && <Settings running={running} onClose={() => setSettingsOpen(false)} />}
-    </div>
+      </div>
+    </ErrorBoundary>
   )
 }
