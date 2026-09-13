@@ -71,7 +71,7 @@ pub struct ProxyState {
 
 /// Cookie 缓存：存 cookie 字符串 + 获取时间，用于过期检测。
 #[derive(Clone)]
-struct CookieCache {
+pub(crate) struct CookieCache {
     value: Option<String>,
     /// 获取时间；None 表示尚未获取
     obtained_at: Option<Instant>,
@@ -173,7 +173,7 @@ pub async fn start_proxy(
         .route("/__dsh_theme", any(theme_handler))
         .route("/__dsh_health", any(health_handler));
     for route in WS_ROUTES.iter() {
-        router = router.route(*route, any(ws_handler));
+        router = router.route(route, any(ws_handler));
     }
     let app = router.fallback(any(handler)).with_state(state);
 
@@ -344,6 +344,7 @@ async fn handler(
 
 /// 401 重试：指数退避，最多 MAX_401_RETRIES 次。
 /// 每次重试前重新握手获取新 cookie（解决 cookie 过期问题）。
+#[allow(clippy::too_many_arguments)] // 转发需透传 method/uri/headers/body/token/root/theme，超参边界可接受
 async fn retry_with_backoff(
     s: &Arc<ProxyState>,
     method: Method,
@@ -566,9 +567,9 @@ async fn transform_upstream(
         // 抢在 <head> 开标签之后注入，保证 localStorage[KEY] 在插件 mount/restore 之前已就位。
         let mut insert_at: Option<usize> = None;
         if let Some(h) = bytes.windows(5).position(|w| w == b"<head") {
-            for i in h..bytes.len().min(h + 64) {
-                if bytes[i] == b'>' {
-                    insert_at = Some(i + 1);
+            for (i, b) in bytes[h..bytes.len().min(h + 64)].iter().enumerate() {
+                if *b == b'>' {
+                    insert_at = Some(h + i + 1);
                     break;
                 }
             }
@@ -807,7 +808,7 @@ fn strip_proxy_token(pq: &str) -> String {
             let q = &q[1..];
             let kept: Vec<&str> = q
                 .split('&')
-                .filter(|p| p.splitn(2, '=').next().unwrap_or("") != "t")
+                .filter(|p| p.split('=').next().unwrap_or("") != "t")
                 .collect();
             if kept.is_empty() {
                 path.to_string()
@@ -818,7 +819,7 @@ fn strip_proxy_token(pq: &str) -> String {
     }
 }
 
-fn extract_query<'a>(query: &'a str, key: &str) -> Option<String> {
+fn extract_query(query: &str, key: &str) -> Option<String> {
     for pair in query.split('&') {
         let mut it = pair.splitn(2, '=');
         let k = it.next().unwrap_or("");

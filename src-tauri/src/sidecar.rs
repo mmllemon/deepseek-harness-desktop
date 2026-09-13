@@ -296,6 +296,7 @@ async fn on_ready(app: &tauri::AppHandle, agent_port: u16, token: &str, agent_to
     }
 }
 
+#[allow(dead_code)] // 保留：代理意外退出时刷新前端 stopped 状态的事件入口
 fn emit_stopped(app: &tauri::AppHandle, agent_port: u16) {
     let _ = app.emit(
         "agent://state",
@@ -445,7 +446,7 @@ fn extract_agent_token(line: &str) -> Option<String> {
     let idx = line.find("token=")?;
     let rest = &line[idx + "token=".len()..];
     let end = rest
-        .find(|c: char| c == '&' || c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ')' || c == '"' || c == '\'')
+        .find(|c: char| ['&', ' ', '\t', '\r', '\n', ')', '"', '\''].contains(&c))
         .unwrap_or(rest.len());
     let tok = &rest[..end];
     if tok.is_empty() { None } else { Some(tok.to_string()) }
