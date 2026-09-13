@@ -235,17 +235,20 @@ async fn ensure_cookie(s: &Arc<ProxyState>) {
     } else {
         live
     };
-    let mut cache = s.agent_cookie.lock().unwrap();
-    // 已有有效 cookie 则跳过
-    if cache.is_some() && !cache.is_expired() {
-        return;
+    // 已有有效 cookie 则跳过（短锁：判定后立即释放 guard，避免持 MutexGuard 跨 await）
+    {
+        let cache = s.agent_cookie.lock().unwrap();
+        if cache.is_some() && !cache.is_expired() {
+            return;
+        }
     }
     if !tok.is_empty() {
         if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
+            let mut cache = s.agent_cookie.lock().unwrap();
             cache.set(c, Instant::now());
         } else {
             // 握手失败时清空，下次请求再重试（而非带着过期 cookie 反复失败）
-            cache.clear();
+            s.agent_cookie.lock().unwrap().clear();
         }
     }
 }
@@ -372,8 +375,11 @@ async fn retry_with_backoff(
     for attempt in 1..=MAX_401_RETRIES {
         // 每次重试前重新握手获取新 cookie
         if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
-            let mut cache = s.agent_cookie.lock().unwrap();
-            cache.set(c.clone(), Instant::now());
+            // 短锁：set 后立即释放 guard，避免 MutexGuard 跨 await 使 future 非 Send
+            {
+                let mut cache = s.agent_cookie.lock().unwrap();
+                cache.set(c.clone(), Instant::now());
+            }
             match forward_upstream(s, method.clone(), uri, headers, body.clone(), &c).await {
                 Ok(r) => {
                     if r.status() != StatusCode::UNAUTHORIZED {
@@ -617,10 +623,10 @@ async fn health_handler(State(s): State<Arc<ProxyState>>) -> Response {
 async fn theme_handler(
     State(s): State<Arc<ProxyState>>,
     OriginalUri(uri): OriginalUri,
-    headers: &HeaderMap,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !valid_token(&s, &uri, headers) {
+    if !valid_token(&s, &uri, &headers) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     let theme = String::from_utf8_lossy(&body).trim().to_string();
