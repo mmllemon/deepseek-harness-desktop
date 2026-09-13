@@ -70,6 +70,30 @@ jobs:
           # 再清一次确保万无一失
           cargo clean
 
+      # tauri-build 需要 externalBin `node-x86_64-pc-windows-msvc.exe` 存在于
+      # src-tauri/ 与 src-tauri/binaries/（build script CWD 相对路径校验）才会放行编译。
+      # 本 job 独立于 build-windows，需自行 stage，否则 cargo check/clippy 在
+      # tauri build script 处报 `resource path node-...exe doesn't exist` 直接失败。
+      - name: Setup Node 22 (for staging sidecar)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Stage node.exe sidecar (dual location)
+        shell: pwsh
+        working-directory: D:\wb
+        run: |
+          $node = (Get-Command node -ErrorAction Stop).Source
+          foreach ($dest in @(
+              (Join-Path $PWD "src-tauri/node-x86_64-pc-windows-msvc.exe"),
+              (Join-Path $PWD "src-tauri/binaries/node-x86_64-pc-windows-msvc.exe")
+            )) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+            Copy-Item -Path $node -Destination $dest -Force
+            if (-not (Test-Path $dest)) { Write-Error "failed to stage node sidecar at: $dest"; exit 1 }
+            Write-Host "staged node sidecar: $dest ($([math]::Round((Get-Item $dest).Length/1MB,2)) MB)"
+          }
+
       - name: cargo check (fast compile check)
         shell: pwsh
         working-directory: D:\wb\src-tauri
