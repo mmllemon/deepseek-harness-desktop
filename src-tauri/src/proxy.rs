@@ -23,6 +23,7 @@
 //! - Cookie 增加过期时间戳，超过 25 分钟自动标记 stale 强制重新握手。
 //! - 新增 `/__dsh_health` 端点，供外部监控或内部健康检查使用。
 
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
