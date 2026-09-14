@@ -547,6 +547,81 @@ Write-Host "==> syncing plugin runtime dependency closure into dsh-dist"
 Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs -Index $pkgIndex
 
 # ---------------------------------------------------------------------------
+# STEP 6.6.5: Inject a Windows stub for @deepseek-ai/node-addon-landlock-run
+# ---------------------------------------------------------------------------
+# WHY: upstream `dsh-sandbox-local` hard-imports the Linux-only landlock-run
+#   native module at TOP LEVEL (src/index.ts `import { ... launcherPath, probe }
+#   from "@deepseek-ai/node-addon-landlock-run"`). ESM resolves static imports
+#   at module load regardless of platform, so on Windows the harness crashes
+#   with ERR_MODULE_NOT_FOUND before its win32 chain (windows-acl) is ever
+#   consulted. The package itself is Linux-gated (its native prebuilds are
+#   linux-<arch> optionalDependencies), so pnpm install never materializes it on
+#   a Windows runner -- hence it is absent from dsh-dist.
+#   See https://github.com/deepseek-ai/deepseek-harness (packages/sandbox/
+#   sandbox-local/src/index.ts).
+#
+# Fix: ship a self-contained stub that exports the SAME names sandbox-local
+#   imports (LAUNCHER_BIN, LAUNCHER_FAILURE_EXIT, grantArgs, launcherPath,
+#   probe). On Windows only LAUNCHER_BIN / LAUNCHER_FAILURE_EXIT are read at
+#   module-eval time (building the fatal-diagnostics table); the other three are
+#   only reached from the Linux "landlock" chain, which the win32 chain never
+#   selects, so a fail-closed implementation is both correct and unreachable.
+#   Injecting a stub (rather than editing upstream compiled code) keeps the
+#   artifact self-contained and survives upstream rebuilds.
+# Verification: this gate fails if the stub's exports do not cover every name
+#   sandbox-local imports, and if the stub is not materialized as a real file
+#   (checked again after the STEP 6.7 dereference).
+# ---------------------------------------------------------------------------
+function Invoke-WindowsLandlockStub {
+    param([string]$OutDir)
+    Write-Host "==> [PATCH-05] injecting Windows stub for @deepseek-ai/node-addon-landlock-run"
+    $pkgDir = Join-Path $OutDir "node_modules/@deepseek-ai/node-addon-landlock-run"
+    New-Item -ItemType Directory -Force -Path (Join-Path $pkgDir 'lib') | Out-Null
+
+    # identifiers that sandbox-local persists (must stay in sync with the import above;
+    # the gate below asserts every one of them exists in the compiled stub).
+    $stubSrc = @'
+export const LAUNCHER_BIN = "landlock-run";
+export const LAUNCHER_FAILURE_EXIT = 125;
+// Landlock (Linux ) is the Linux security-module sandbox; these are only reachable from the
+// Linux "landlock" runner chain, which the Windows (win32: ["windows-acl"]) chain never selects.
+// Fail closed rather than pretending the sandbox ran.
+export function grantArgs() { return []; }
+export function launcherPath() { throw new Error("node-addon-landlock-run is Linux-only and unavailable on Windows"); }
+export function probe() { return "unusable"; }
+'@
+    $pkgManifest = @'
+{
+  "name": "@deepseek-ai/node-addon-landlock-run",
+  "version": "0.0.0-windows-stub",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": { ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" } }
+}
+'@
+    $stubDts = @'
+export declare const LAUNCHER_BIN: string;
+export declare const LAUNCHER_FAILURE_EXIT: number;
+export declare function grantArgs(opts?: { readOnly?: string[]; readWrite?: string[] }): string[];
+export declare function launcherPath(): string;
+export declare function probe(launcher?: string, opts?: { timeoutMs?: number }): "full" | "partial" | "unusable";
+'@
+    [System.IO.File]::WriteAllText((Join-Path $pkgDir 'package.json'), ($pkgManifest -join ''), $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $pkgDir 'lib/index.d.ts'), ($stubDts -join ''), $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $pkgDir 'lib/index.js'), $stubSrc, $utf8NoBom)
+
+    # gate: every name sandbox-local statically imports must be exported by the stub
+    $required = @('LAUNCHER_BIN', 'LAUNCHER_FAILURE_EXIT', 'grantArgs', 'launcherPath', 'probe')
+    $missing = @($required | Where-Object { $stubSrc -notmatch ("export (const|function) $([regex]::Escape($_))") })
+    if ($missing.Count -gt 0) {
+        Write-Error "landlock stub missing exports: $($missing -join ', ')"
+        exit 1
+    }
+    Write-Host "   stub exports verified: $($required -join ', ')"
+}
+Invoke-WindowsLandlockStub -OutDir $outAbs
+
+# ---------------------------------------------------------------------------
 # STEP 6.7: Materialize dsh-dist as REAL files, then strip the residual .pnpm
 #   virtual-store structure.
 #
@@ -626,6 +701,14 @@ if (-not (Test-Path -LiteralPath $piAiManifest)) {
     exit 1
 }
 Write-Host "   verified pi-ai hidden manifest present: $piAiManifest"
+
+# landlock stub must survive the STEP 6.7 robocopy dereference as a real file
+$landlockStub = Join-Path $outAbs "node_modules/@deepseek-ai/node-addon-landlock-run/lib/index.js"
+if (-not (Test-Path -LiteralPath $landlockStub)) {
+    Write-Error "Windows landlock stub missing after materialize: $landlockStub -- harness will crash on Windows (upstream dsh-sandbox-local top-level imports it)"
+    exit 1
+}
+Write-Host "   verified landlock Windows stub present: $landlockStub"
 
 $entry = Join-Path $outAbs "lib/bin.js"
 if (-not (Test-Path $entry)) { Write-Error "deploy produced no entry: $entry"; exit 1 }
