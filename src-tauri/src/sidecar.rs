@@ -96,7 +96,9 @@ fn process_alive(pid: u32) -> bool {
 
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if h.is_null() || h == INVALID_HANDLE_VALUE {
+        // 注意：windows-sys 0.52 的 HANDLE 是 `isize`（不是 `*mut c_void`），
+        // 失败返回的是 0 而不是空指针 → 必须用 `== 0` 判断，不能用 `.is_null()`。
+        if h == 0 || h == INVALID_HANDLE_VALUE {
             return false;
         }
         CloseHandle(h);
