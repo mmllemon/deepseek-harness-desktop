@@ -574,6 +574,8 @@ Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs -Index $pkgIndex
 # ---------------------------------------------------------------------------
 function Invoke-WindowsLandlockStub {
     param([string]$OutDir)
+    # UTF-8 without BOM for the generated .js/.json/.d.ts (BOM would break ESM 'import' parsing).
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     Write-Host "==> [PATCH-05] injecting Windows stub for @deepseek-ai/node-addon-landlock-run"
     $pkgDir = Join-Path $OutDir "node_modules/@deepseek-ai/node-addon-landlock-run"
     New-Item -ItemType Directory -Force -Path (Join-Path $pkgDir 'lib') | Out-Null
