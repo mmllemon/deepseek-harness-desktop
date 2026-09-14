@@ -270,6 +270,120 @@ async fn wait_cookie(s: &Arc<ProxyState>) -> String {
     s.agent_cookie.lock().unwrap().get().unwrap_or_default()
 }
 
+/// 根页面导航专用的「快速」cookie 获取：最多花约 3 秒。
+///
+/// 与 `wait_cookie`（最多 8 轮 × 每次最长 10 秒握手）不同，这里**主动快速失败**，
+/// 把继续等待的责任交给自愈引导页里的 JS 轮询（见 `boot_page_response`）。
+/// 原因：冷启动时上游可能数十秒不可用，若让 WebView 的首个导航请求同步挂那么久，
+/// 用户只会看到一个长时间空白的窗口。
+async fn wait_cookie_brief(s: &Arc<ProxyState>) -> String {
+    if let Some(c) = { s.agent_cookie.lock().unwrap().get() } {
+        return c;
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(3), ensure_cookie(s)).await;
+    s.agent_cookie.lock().unwrap().get().unwrap_or_default()
+}
+
+/// 判断这是浏览器「导航到页面」的请求（`Accept` 含 `text/html`），
+/// 而不是 SPA 发出的 XHR / fetch（那类请求的 Accept 是 application/json 等）。
+fn wants_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("text/html"))
+        .unwrap_or(false)
+}
+
+/// 冷启动自愈引导页。
+///
+/// 背景（2026-09-14 实机）：新装 / 升级后的**首次**启动时，上游 harness 需要先完成初始化
+/// （生成 `.credentials.yaml` 签名密钥、编译 profile 等），其可服务时刻可能明显晚于代理启动。
+/// 此时 WebView 的首次导航会撞上「会话 cookie 尚未 harvest」。
+///
+/// 旧行为是直接回一行 `502 harness auth cookie unavailable` 纯文本 ——
+/// 浏览器会把它当成最终页面，**既不是 HTML、也不会自动重试**，
+/// 于是 UI 永久停在加载态，只能人工重启应用（这正是线上观察到的症状）。
+///
+/// 现改为返回一个自带轮询的 HTML：每 800ms 查一次 `/__dsh_health`，
+/// 一旦 `ready=true` 就 `location.replace` 回原 URL（保留 `?t=` token），
+/// 把「一次性失败」变成「自动等待、就绪即接管」。
+fn boot_page_response(uri: &Uri, reason: &str) -> Response {
+    // 回跳目标即本次请求的 path+query（根路径 + token），不额外信任任何外部输入。
+    let target = uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .filter(|s| s.starts_with('/'))
+        .unwrap_or("/");
+    let target_json = serde_json::to_string(target).unwrap_or_else(|_| "\"/\"".to_string());
+    let reason_json = serde_json::to_string(reason).unwrap_or_else(|_| "\"\"".to_string());
+
+    let html = format!(
+        r#"<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>正在连接…</title>
+<style>
+ html,body{{height:100%;margin:0}}
+ body{{display:flex;align-items:center;justify-content:center;
+   font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+   background:#0f1115;color:#e6e6e6}}
+ .box{{text-align:center;max-width:440px;padding:0 24px}}
+ .spin{{width:28px;height:28px;margin:0 auto 18px;border:3px solid #3a3f4b;
+   border-top-color:#6b8afd;border-radius:50%;animation:r 1s linear infinite}}
+ @keyframes r{{to{{transform:rotate(360deg)}}}}
+ h1{{font-size:16px;font-weight:600;margin:0 0 8px}}
+ p{{margin:6px 0;color:#9aa4b2;font-size:13px}}
+ code{{background:#1a1d24;padding:1px 5px;border-radius:4px;font-size:12px;color:#8b95a5}}
+ button{{margin-top:16px;padding:7px 18px;border:0;border-radius:6px;
+   background:#3b5bdb;color:#fff;font-size:13px;cursor:pointer}}
+ #warn{{display:none;color:#e0a458}}
+</style></head><body><div class="box">
+<div class="spin" id="sp"></div>
+<h1 id="t">正在连接本地服务…</h1>
+<p>首次启动需要初始化运行环境，可能需要几十秒，请稍候。</p>
+<p id="warn">等待时间较长，可点击下方按钮重试。</p>
+<p><code id="why"></code></p>
+<button id="btn" style="display:none" onclick="location.reload()">重试</button>
+</div>
+<script>
+(function(){{
+  var TARGET={target_json};
+  var REASON={reason_json};
+  var n=0, MAXWAIT=225;   // 225 × 800ms ≈ 3 分钟
+  document.getElementById('why').textContent=REASON;
+  function giveUp(){{
+    document.getElementById('sp').style.display='none';
+    document.getElementById('t').textContent='暂时无法连接本地服务';
+    document.getElementById('warn').style.display='block';
+    document.getElementById('btn').style.display='inline-block';
+  }}
+  function next(){{
+    n++;
+    if(n===40){{ document.getElementById('warn').style.display='block'; }}
+    if(n>=MAXWAIT){{ giveUp(); return; }}
+    setTimeout(poll, 800);
+  }}
+  function poll(){{
+    fetch('/__dsh_health',{{cache:'no-store'}})
+      .then(function(r){{return r.json()}})
+      .then(function(j){{ if(j&&j.ready===true){{ location.replace(TARGET); return; }} next(); }})
+      .catch(function(){{ next(); }});
+  }}
+  setTimeout(poll, 500);
+}})();
+</script></body></html>"#,
+        target_json = target_json,
+        reason_json = reason_json,
+    );
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .body(Body::from(html))
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "boot page failed").into_response())
+}
+
 /// 校验请求携带的 token（cookie `dsh_token` 或首次 query `t`）。
 fn valid_token(s: &ProxyState, uri: &Uri, headers: &HeaderMap) -> bool {
     let from_query = extract_query(uri.query().unwrap_or(""), "t");
@@ -316,27 +430,56 @@ async fn handler(
     }
 
     // 附加上游 harness 鉴权 cookie（alpha.3+ 强制）：惰性握手兜底
-    let cookie = wait_cookie(&s).await;
-    if cookie.is_empty() {
-        return (StatusCode::BAD_GATEWAY, "harness auth cookie unavailable").into_response();
-    }
-
+    //
+    // 冷启动容错（2026-09-14）：若这是浏览器的**页面导航**（根路径 + Accept: text/html），
+    // 则走「快速失败 + 自愈引导页」，而不是长时间阻塞后回一行裸 502 文本
+    // （浏览器不会重试纯文本错误页 → UI 永久卡死）。详见 `boot_page_response`。
     let is_root = uri.path() == "/";
+    let html_nav = is_root && wants_html(&headers);
     let theme = s.theme.clone();
+
+    let cookie = if html_nav {
+        wait_cookie_brief(&s).await
+    } else {
+        wait_cookie(&s).await
+    };
+    if cookie.is_empty() {
+        return if html_nav {
+            boot_page_response(&uri, "等待上游鉴权会话就绪…")
+        } else {
+            (StatusCode::BAD_GATEWAY, "harness auth cookie unavailable").into_response()
+        };
+    }
 
     // 首次转发
     let resp =
         match forward_upstream(&s, method.clone(), &uri, &headers, body.clone(), &cookie).await {
             Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+            Err(e) => {
+                return if html_nav {
+                    boot_page_response(&uri, "上游 harness 尚未就绪…")
+                } else {
+                    (StatusCode::BAD_GATEWAY, e).into_response()
+                }
+            }
         };
     let status = resp.status();
 
     // 401 = 会话 cookie 过期或被拒：指数退避重试（最多 MAX_401_RETRIES 次）
     if status == StatusCode::UNAUTHORIZED {
-        let resp = retry_with_backoff(&s, method, &uri, &headers, body, &cookie, is_root, &theme)
-            .await;
-        return resp;
+        let resp =
+            retry_with_backoff(&s, method, &uri, &headers, body, &cookie, is_root, &theme).await;
+        // 重试耗尽仍未通过：页面导航交给引导页继续轮询（而非把 401 文本丢给浏览器）
+        return if html_nav && !resp.status().is_success() {
+            boot_page_response(&uri, "上游鉴权尚未就绪…")
+        } else {
+            resp
+        };
+    }
+
+    // 根页面导航拿到任何非 2xx（例如上游路由尚未挂载返回 404/503）同样交给引导页
+    if html_nav && !status.is_success() {
+        return boot_page_response(&uri, &format!("上游返回 {}…", status.as_u16()));
     }
 
     transform_upstream(resp, &theme, set_cookie.as_deref(), is_root).await
@@ -604,17 +747,25 @@ async fn transform_upstream(
 
 /// 健康检查端点：返回 200 表明代理自身运行正常（不依赖上游 harness 状态）。
 /// 可用于容器编排健康探针或人工诊断。
+///
+/// `ready` 字段（2026-09-14 新增）= 已 harvest 且未过期 —— 冷启动引导页据此判断
+/// 「上游可服务」，然后 `location.replace` 回真正的界面。
+/// 顺带修复：原实现的 cookie 值未经引号包裹，产出的是**非法 JSON**
+/// （形如 `"cookie":ok( expired=false)`），任何 JSON 解析器都会失败。
 async fn health_handler(State(s): State<Arc<ProxyState>>) -> Response {
-    let cookie_locked = s.agent_cookie.lock().unwrap();
-    let cookie_status = if cookie_locked.is_some() {
-        let expired = cookie_locked.is_expired();
-        format!("ok( expired={})", expired)
-    } else {
-        "stale(no cookie yet)".to_string()
+    let (has_cookie, expired) = {
+        let c = s.agent_cookie.lock().unwrap();
+        (c.is_some(), c.is_expired())
+    };
+    let ready = has_cookie && !expired;
+    let cookie_status = match (has_cookie, expired) {
+        (true, false) => "ok",
+        (true, true) => "expired",
+        (false, _) => "absent",
     };
     let resp = format!(
-        "{{\"status\":\"ok\",\"agent_port\":{},\"cookie\":{},\"proxy_uptime\":\"healthy\"}}",
-        s.agent_port, cookie_status
+        "{{\"status\":\"ok\",\"ready\":{},\"agent_port\":{},\"cookie\":\"{}\",\"proxy_uptime\":\"healthy\"}}",
+        ready, s.agent_port, cookie_status
     );
     (StatusCode::OK, resp).into_response()
 }
@@ -864,4 +1015,129 @@ fn decode_brotli(b: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     let mut out = Vec::new();
     d.read_to_end(&mut out)?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn accept(v: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_str(v).unwrap(),
+        );
+        h
+    }
+
+    /// `wants_html` 必须只对浏览器「导航到页面」的请求为真，
+    /// 否则 SPA 的 fetch 请求失败时会被替换成引导页 HTML，反而弄坏界面。
+    #[test]
+    fn wants_html_only_for_browser_navigation() {
+        assert!(wants_html(&accept(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        )));
+        assert!(wants_html(&accept("text/html")));
+        assert!(!wants_html(&accept("application/json, text/plain, */*")));
+        assert!(!wants_html(&accept("*/*")));
+        assert!(
+            !wants_html(&HeaderMap::new()),
+            "缺 Accept 时按非导航处理，宁可回 502"
+        );
+    }
+
+    /// 引导页必须：200 + HTML、回跳目标 = 原始 path+query（保住 ?t= token）、
+    /// 轮询 /__dsh_health、并以 ready 作为接管判据。
+    #[tokio::test]
+    async fn boot_page_targets_original_request_and_polls_health() {
+        let uri: Uri = "/?t=abcDEF123_-=".parse().unwrap();
+        let resp = boot_page_response(&uri, "等待上游鉴权会话就绪…");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "no-store"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("var TARGET=\"/?t=abcDEF123_-=\""),
+            "应回跳到原始 path+query"
+        );
+        assert!(html.contains("/__dsh_health"), "应轮询健康端点");
+        assert!(html.contains("j.ready===true"), "应以 ready 作为接管判据");
+        assert!(html.contains("等待上游鉴权会话就绪…"), "应显示失败原因");
+    }
+
+    /// 回跳目标与原因文本都经 JSON 转义，避免引号/反斜杠破坏内联脚本。
+    /// 同时验证：非 `/` 开头的 path 不会被当成回跳目标。
+    #[tokio::test]
+    async fn boot_page_escapes_inline_json() {
+        let uri: Uri = "/".parse().unwrap();
+        let resp = boot_page_response(&uri, "含\"引号\"与\\反斜杠");
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("var TARGET=\"/\""), "根路径回落为 /");
+        assert!(
+            html.contains("含\\\"引号\\\"与\\\\反斜杠"),
+            "原因文本必须被 JSON 转义: {html}"
+        );
+    }
+
+    /// `/__dsh_health` 必须是**合法 JSON** 且带 ready 字段
+    /// （旧实现产出裸值 `"cookie":ok( expired=false)`，任何 JSON 解析器都会失败）。
+    #[test]
+    fn health_payload_is_valid_json_with_ready() {
+        let empty = CookieCache::new();
+        assert!(!empty.is_some(), "新建缓存应为空");
+
+        let mut fresh = CookieCache::new();
+        fresh.set("dsh-auth-xxx=yyy".into(), Instant::now());
+        assert!(
+            fresh.is_some() && !fresh.is_expired(),
+            "刚写入的 cookie 应有效"
+        );
+
+        for cookie in [&empty, &fresh] {
+            let ready = cookie.is_some() && !cookie.is_expired();
+            let cookie_status = match (cookie.is_some(), cookie.is_expired()) {
+                (true, false) => "ok",
+                (true, true) => "expired",
+                (false, _) => "absent",
+            };
+            // 与 health_handler 相同的拼装逻辑（handler 需要 AppHandle，单测无法构造）
+            let payload = format!(
+                "{{\"status\":\"ok\",\"ready\":{},\"agent_port\":{},\"cookie\":\"{}\",\"proxy_uptime\":\"healthy\"}}",
+                ready, 3081, cookie_status
+            );
+            let v: serde_json::Value =
+                serde_json::from_str(&payload).expect("health 响应必须是合法 JSON");
+            assert_eq!(v["ready"].as_bool().unwrap(), ready);
+            assert_eq!(v["cookie"].as_str().unwrap(), cookie_status);
+        }
+
+        // 回归护栏：旧格式（cookie 值未加引号）确实不是合法 JSON
+        assert!(
+            serde_json::from_str::<serde_json::Value>(
+                r#"{"status":"ok","cookie":ok( expired=false)}"#
+            )
+            .is_err(),
+            "旧格式应被判为非法 JSON —— 这正是本次修复点"
+        );
+    }
 }
