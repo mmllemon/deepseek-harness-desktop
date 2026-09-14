@@ -69,8 +69,18 @@ deepseek-harness-desktop/
 - 配套：`/__dsh_health` 新增 `ready` 字段（已 harvest 且未过期），并修正该端点此前输出
   **非法 JSON** 的问题（cookie 值未加引号）；`src/App.tsx` 增加状态兜底轮询 ——
   Tauri 事件不缓存，若 sidecar 在 React 订阅前就绪会丢失 `agent://ready`。
-- 回归闸门：`cargo test --lib` 新增 4 个用例（`wants_html` 判定 / 引导页回跳目标与轮询特征 /
-  内联 JSON 转义 / health 载荷为合法 JSON 且 ready 语义正确）。
+- **循环依赖修复（2026-09-14 实机复现，第二轮）**：`ready` 取决于会话 cookie 是否已 harvest，
+  而 harvest **只发生在页面请求路径上**；引导页却只轮询 `/__dsh_health`、不再请求页面 ——
+  等于「等一个只有它自己去请求页面才会翻真的标志」，**永远等不到**。实机表现为该端点连续
+  180 s 返回 `"cookie":"absent"`、引导页永不跳转。修法两条腿：
+  1. `health_handler` 自己驱动一次握手（`ensure_cookie_with(&s, 1)`，单次尝试 → 轮询开销恒定、秒级收敛）；
+  2. 引导页在轮询之外，每 4 次（约 3.2 s）用 `HEAD` **真敲一次原地址** —— 这条请求与浏览器导航
+     走同一条处理路径（含 token 校验与握手），因此即使该端点的语义将来变化，引导页也一定能收敛，
+     不把成败押在单一「就绪标志」上。
+  另：`/__dsh_health` 增加 `agent_token` 布尔字段，用于区分「上游还没起来」与「launch token 没解析到」
+  （后者单靠握手重试永远好不了）。
+- 回归闸门：`cargo test --lib` 覆盖 `wants_html` 判定 / 引导页回跳目标与轮询特征 /
+  **周期性 HEAD 冗余探活** / 内联 JSON 转义 / health 载荷为合法 JSON 且 ready、agent_token 语义正确。
 
 ## 已知限制
 - 执行 `tauri build` / 出安装包需要 **Windows + Rust (MSVC) + WebView2 SDK** 环境；CI 已封装好，本地一般无需手动出包。
