@@ -11,12 +11,12 @@
 //! - 进程树回收：优先 Tauri 进程管理；Windows 下 Job Object 兜底（§13.8 D8）。
 
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use base64::Engine;
 use rand::Rng;
@@ -47,6 +47,205 @@ fn normalize_path(p: PathBuf) -> PathBuf {
     p
 }
 
+// ---------------------------------------------------------------------------
+// 孤儿写者锁自愈（2026-09-14 实机 P0：应用卡在「正在启动 Agent…」）
+//
+// 上游 `@deepseek-ai/dsh-atomic-write` 用兄弟文件 `<file>.lock` 做跨进程写者互斥，
+// 文件内容只有**持有者 PID**，争用者默认等 2 秒即失败；上游设计明确规定
+// 「孤儿锁的恢复是运维动作」（contender 永不删已有锁）。
+// 于是 sidecar 一旦被强杀（taskkill / 应用崩溃 / 宿主被回收），锁就永久残留，
+// 此后**每一次**启动都在 2 秒后超时退出 —— 用户侧表现：窗口能开、进程长活、
+// UI 永久停在「正在启动 Agent…」且没有任何报错。见 PITFALLS.md P24。
+// 这里在 spawn 之前主动做一次清理，把「运维动作」自动化掉。
+// ---------------------------------------------------------------------------
+
+/// 扫描时**不递归进入**的目录名（大小写不敏感）：这些子树巨大且不可能存放写者锁。
+const LOCK_SCAN_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    ".pnpm",
+    ".git",
+    "target",
+    "dist",
+    "dsh-dist",
+    "cache",
+    "code cache",
+    "gpucache",
+];
+
+/// 递归深度上限（`$DSH_HOME` 实际层级很浅，防止异常结构拖慢启动）。
+const LOCK_SCAN_MAX_DEPTH: usize = 6;
+
+/// 遍历条目数硬上限，兜底防止极端目录树把启动拖死。
+const LOCK_SCAN_MAX_ENTRIES: usize = 20_000;
+
+/// 孤儿锁「最小年龄」：刚创建、内容可能还没写完的锁一律不碰。
+const LOCK_MIN_AGE: Duration = Duration::from_secs(5);
+
+/// 判断 PID 对应的进程是否仍存活。
+///
+/// 用 `PROCESS_QUERY_LIMITED_INFORMATION`（0x1000）而不是 `PROCESS_QUERY_INFORMATION`：
+/// 前者对任意完整性级别的进程都能打开，且不像 `PROCESS_ALL_ACCESS` 那样要求提权，
+/// 正好用于「存在性探测」。打开失败 = 进程不存在。
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Threading::OpenProcess;
+
+    // https://learn.microsoft.com/windows/win32/procthread/process-security-and-access-rights
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        // 注意：windows-sys 0.52 的 HANDLE 是 `isize`（不是 `*mut c_void`），
+        // 失败返回的是 0 而不是空指针 → 必须用 `== 0` 判断，不能用 `.is_null()`。
+        if h == 0 || h == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        CloseHandle(h);
+        true
+    }
+}
+
+/// 非 Windows：本应用只发布 Windows 产物，此分支仅为跨平台编译与本地单测服务。
+/// `/proc` 存在时按进程目录判断，否则保守返回 `true`（即**永不清理**，宁可不修也不错删）。
+#[cfg(not(windows))]
+fn process_alive(pid: u32) -> bool {
+    if Path::new("/proc").is_dir() {
+        PathBuf::from(format!("/proc/{pid}")).exists()
+    } else {
+        true
+    }
+}
+
+/// UTC 时间戳 `YYYYMMDD-HHMMSS`（不引额外依赖，用 Howard Hinnant 的 civil-from-days 算法）。
+fn utc_stamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}{m:02}{d:02}-{:02}{:02}{:02}",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// 把「1970-01-01 起的天数」换算为 `(年, 月, 日)`。
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
+/// 自愈：清理 `$DSH_HOME` 下由**已死进程**持有的孤儿写者锁（`*.lock`）。
+///
+/// 保守策略（宁可漏修，绝不误删活锁）：
+/// 1. 只处理文件名以 `.lock` 结尾的**普通文件**（跳过目录、符号链接）；
+/// 2. 锁内容必须能解析出 PID，否则跳过（可能是别的格式或尚未写完）；
+/// 3. PID 为 0、等于自身、或该 PID 仍存活 → 跳过（可能是另一个实例在正常工作）；
+/// 4. 文件年龄必须 > `LOCK_MIN_AGE`，避免误伤刚创建的活锁；
+/// 5. 判定为孤儿后 **改名备份**为 `<原名>.orphan.bak_<UTC 时间戳>`，**不删除**，
+///    现场可人工恢复。
+///
+/// 返回被隔离的 `(原路径, 已死 PID)` 列表，供上层写日志 / 上报 UI。
+fn heal_stale_locks(home: &Path) -> Vec<(PathBuf, u32)> {
+    let mut healed: Vec<(PathBuf, u32)> = Vec::new();
+    if !home.is_dir() {
+        return healed;
+    }
+
+    let me = std::process::id();
+    let mut budget = LOCK_SCAN_MAX_ENTRIES;
+    // 显式栈的深度优先遍历，避免递归爆栈；同时受深度与条目数双重约束。
+    let mut stack: Vec<(PathBuf, usize)> = vec![(home.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > LOCK_SCAN_MAX_DEPTH || budget == 0 {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue, // 目录不可读（权限/瞬时消失）→ 跳过
+        };
+        for ent in entries.flatten() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+
+            let path = ent.path();
+            let ftype = match ent.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            if ftype.is_dir() {
+                let name = ent.file_name().to_string_lossy().to_ascii_lowercase();
+                if LOCK_SCAN_SKIP_DIRS.contains(&name.as_str()) {
+                    continue;
+                }
+                stack.push((path, depth + 1));
+                continue;
+            }
+            if !ftype.is_file() {
+                continue; // 符号链接 / 其它特殊文件一律不动
+            }
+
+            let fname = ent.file_name().to_string_lossy().into_owned();
+            if !fname.to_ascii_lowercase().ends_with(".lock") {
+                continue;
+            }
+
+            // 上游约定：锁内容 = 持有者 PID（一行数字）。
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let pid = match content
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.parse::<u32>().ok())
+            {
+                Some(p) => p,
+                None => continue,
+            };
+            if pid == 0 || pid == me || process_alive(pid) {
+                continue;
+            }
+
+            // 年龄保护：刚创建的文件可能正处在「已建锁、未写入 PID」的正常窗口内。
+            // 取不到 mtime 时按「太新」处理（宁可漏修，不可误删）。
+            let too_fresh = ent
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| SystemTime::now().duration_since(t).unwrap_or_default() < LOCK_MIN_AGE)
+                .unwrap_or(true);
+            if too_fresh {
+                continue;
+            }
+
+            let backup = path.with_file_name(format!("{fname}.orphan.bak_{}", utc_stamp()));
+            if std::fs::rename(&path, &backup).is_ok() {
+                healed.push((path, pid));
+            }
+        }
+    }
+
+    healed
+}
+
 /// 启动 dsh sidecar。若已在运行，直接返回当前状态。
 pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
     // 防重入：先释放锁再取状态，避免 current_status 内部再次加锁造成死锁。
@@ -61,6 +260,26 @@ pub async fn spawn_dsh(app: &tauri::AppHandle) -> Result<AgentStatus, String> {
 
     let cfg = app.state::<AppState>().config.lock().unwrap().clone();
     let home = config::resolve_dsh_home(app, &cfg);
+
+    // 自愈：先隔离上次强杀/崩溃遗留的孤儿写者锁，否则 sidecar 必在 2 秒后超时退出，
+    // UI 永久卡在「正在启动 Agent…」且无任何报错（2026-09-14 实机 P0，见 heal_stale_locks）。
+    let healed_locks = heal_stale_locks(&home);
+    if !healed_locks.is_empty() {
+        for (path, pid) in &healed_locks {
+            let line = format!(
+                "[self-heal] 已隔离孤儿写者锁（持有者 PID {pid} 已退出，原文件已改名备份）: {}",
+                path.display()
+            );
+            let _ = app.emit(
+                "agent://log",
+                LogLine {
+                    stream: "system".into(),
+                    line,
+                },
+            );
+        }
+    }
+
     config::write_settings_yaml(&home, &cfg)?;
     let env = config::build_env(&cfg, &home);
 
@@ -450,4 +669,131 @@ fn extract_agent_token(line: &str) -> Option<String> {
         .unwrap_or(rest.len());
     let tok = &rest[..end];
     if tok.is_empty() { None } else { Some(tok.to_string()) }
+}
+
+// ---------------------------------------------------------------------------
+// 单元测试：孤儿写者锁自愈（CI `cargo test --lib` 闸门）
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// 一个**保证不可能存在**的 PID：Windows PID 为 4 的倍数且远小于该值，
+    /// Linux 也不可能分配到 `/proc/4294967294`。
+    const DEAD_PID: u32 = u32::MAX - 1;
+
+    /// 建一个隔离的临时 `$DSH_HOME`（含 `profiles/` 子目录）。
+    fn temp_home(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("dsh-heal-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(p.join("profiles")).unwrap();
+        p
+    }
+
+    /// 写一个内容为 PID 的锁文件，并把 mtime 往前拨 1 小时，
+    /// 以绕过 `LOCK_MIN_AGE` 的「新文件不碰」保护。
+    fn write_aged_lock(path: &Path, content: &str) {
+        fs::write(path, content).unwrap();
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(path) {
+            let old = SystemTime::now() - Duration::from_secs(3600);
+            let _ = f.set_modified(old);
+        }
+    }
+
+    fn backup_count(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".orphan.bak_"))
+            .count()
+    }
+
+    /// 已死 PID 的锁必须被隔离：原路径消失 + 留下改名备份（不删除）。
+    #[test]
+    fn heals_lock_held_by_dead_pid() {
+        let home = temp_home("dead");
+        let lock = home.join("profiles").join("node_modules.lock");
+        write_aged_lock(&lock, &DEAD_PID.to_string());
+
+        let healed = heal_stale_locks(&home);
+
+        assert_eq!(healed.len(), 1, "应恰好隔离 1 个孤儿锁，实际 {healed:?}");
+        assert_eq!(healed[0].1, DEAD_PID);
+        assert!(!lock.exists(), "原锁文件应已改名");
+        assert_eq!(
+            backup_count(&home.join("profiles")),
+            1,
+            "应留下 1 个改名备份"
+        );
+
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// 活锁（持有者 = 本进程）绝不能被碰。
+    #[test]
+    fn keeps_lock_held_by_live_process() {
+        let home = temp_home("live");
+        let lock = home.join("profiles").join("node_modules.lock");
+        write_aged_lock(&lock, &std::process::id().to_string());
+
+        let healed = heal_stale_locks(&home);
+
+        assert!(healed.is_empty(), "活锁不应被清理: {healed:?}");
+        assert!(lock.exists(), "活锁文件必须原样保留");
+        assert_eq!(backup_count(&home.join("profiles")), 0);
+
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// 刚创建的锁（未过年龄阈值）应被放过，即使 PID 已死。
+    #[test]
+    fn keeps_fresh_lock_even_with_dead_pid() {
+        let home = temp_home("fresh");
+        let lock = home.join("profiles").join("node_modules.lock");
+        fs::write(&lock, DEAD_PID.to_string()).unwrap(); // 不拨 mtime → 刚刚创建
+
+        let healed = heal_stale_locks(&home);
+
+        assert!(healed.is_empty(), "新锁应被年龄保护放过: {healed:?}");
+        assert!(lock.exists());
+
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// 非锁文件、内容无法解析为 PID 的锁、以及跳过目录内的锁，一律不动。
+    #[test]
+    fn ignores_non_lock_unparsable_and_skipped_dirs() {
+        let home = temp_home("ignore");
+
+        let notes = home.join("profiles").join("notes.txt");
+        fs::write(&notes, DEAD_PID.to_string()).unwrap();
+
+        let weird = home.join("profiles").join("weird.lock");
+        write_aged_lock(&weird, "not-a-pid\n");
+
+        // node_modules 在跳过名单内 → 其中的锁不应被扫描到
+        let nested_dir = home.join("profiles").join("node_modules");
+        fs::create_dir_all(&nested_dir).unwrap();
+        let nested = nested_dir.join("pkg.lock");
+        write_aged_lock(&nested, &DEAD_PID.to_string());
+
+        let healed = heal_stale_locks(&home);
+
+        assert!(healed.is_empty(), "不应清理任何文件: {healed:?}");
+        assert!(notes.exists() && weird.exists() && nested.exists());
+
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// `utc_stamp()` 输出形如 `YYYYMMDD-HHMMSS`（用于备份文件名可读性）。
+    #[test]
+    fn utc_stamp_shape() {
+        let s = utc_stamp();
+        assert_eq!(s.len(), 15, "时间戳长度应为 15: {s}");
+        assert_eq!(&s[8..9], "-");
+        assert!(s[..8].chars().all(|c| c.is_ascii_digit()));
+    }
 }
