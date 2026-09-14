@@ -17,11 +17,16 @@
 //! HTTP fallback（reqwest）→ 无法完成 101 握手 → 浏览器 WS 以 1006 关闭 → UI 永久
 //! "连接中…" + "正在加载模型…"。
 //! 对策：路由侧同时注册三代端点名，上游侧按候选列表依次尝试，取首个握手成功者。
+//!
+//! 优化（2026-09）：
+//! - 401 重试改为指数退避（最多 3 次），避免 token 长期无效时的无效请求风暴。
+//! - Cookie 增加过期时间戳，超过 25 分钟自动标记 stale 强制重新握手。
+//! - 新增 `/__dsh_health` 端点，供外部监控或内部健康检查使用。
 
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use brotli::Decompressor;
 use flate2::read::{GzDecoder, ZlibDecoder};
@@ -33,7 +38,7 @@ use crate::config;
 use crate::state::AppState;
 use axum::extract::ws::{Message as AMessage, WebSocket as AWebSocket, WebSocketUpgrade};
 use axum::extract::{OriginalUri, State};
-use axum::http::{header::COOKIE, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
+use axum::http::{header::COOKIE, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
@@ -42,6 +47,14 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as TMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+/// Cookie 有效期（毫秒）。超过此时间后视为 stale，下次请求前强制重新握手。
+/// alpha.3 的 session cookie 由 harness 签名，通常有效 30 分钟；设 25 分钟
+/// 留有余量，避免临期导致 401 后再重试。
+const COOKIE_TTL_MS: u64 = 25 * 60 * 1000;
+
+/// 401 最大重试次数（含首次请求）。
+const MAX_401_RETRIES: u32 = 3;
 
 pub struct ProxyState {
     pub agent_port: u16,
@@ -53,7 +66,50 @@ pub struct ProxyState {
     /// 上游 harness 的 launch token（来自 ready 行 `?token=`），用于换取签名 cookie
     pub agent_token: String,
     /// 与上游 harness 完成 token 交换后 Harvest 的会话 cookie（`name=value`，已剥离属性）
-    pub agent_cookie: Arc<Mutex<Option<String>>>,
+    pub agent_cookie: Arc<Mutex<CookieCache>>,
+}
+
+/// Cookie 缓存：存 cookie 字符串 + 获取时间，用于过期检测。
+#[derive(Clone)]
+pub(crate) struct CookieCache {
+    value: Option<String>,
+    /// 获取时间；None 表示尚未获取
+    obtained_at: Option<Instant>,
+}
+
+impl CookieCache {
+    fn new() -> Self {
+        Self {
+            value: None,
+            obtained_at: None,
+        }
+    }
+
+    fn is_some(&self) -> bool {
+        self.value.is_some()
+    }
+
+    /// 检查 cookie 是否过期（超过 COOKIE_TTL_MS）。
+    fn is_expired(&self) -> bool {
+        match (&self.value, self.obtained_at) {
+            (Some(_), Some(obtained)) => obtained.elapsed() > Duration::from_millis(COOKIE_TTL_MS),
+            _ => true,
+        }
+    }
+
+    fn get(&self) -> Option<String> {
+        self.value.clone()
+    }
+
+    fn set(&mut self, value: String, now: Instant) {
+        self.value = Some(value);
+        self.obtained_at = Some(now);
+    }
+
+    fn clear(&mut self) {
+        self.value = None;
+        self.obtained_at = None;
+    }
 }
 
 /// 上游 WebSocket 流类型（明文字节，无 TLS）。
@@ -79,7 +135,7 @@ pub async fn start_proxy(
         .await
         .map_err(|e| e.to_string())?;
     let proxy_port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let agent_cookie: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let agent_cookie = Arc::new(Mutex::new(CookieCache::new()));
 
     // 与上游 harness 完成 token 交换，harvest 签名会话 cookie（alpha.3+ 强制鉴权）。
     // 交换失败（如 harness 尚未就绪）时回退到惰性握手：首个请求到达时再尝试一次。
@@ -98,7 +154,8 @@ pub async fn start_proxy(
     let agent_token = if passed.is_empty() { live } else { passed };
     if !agent_token.is_empty() {
         if let Some(c) = handshake_cookie(agent_port, &agent_token).await {
-            *agent_cookie.lock().unwrap() = Some(c);
+            let mut cache = agent_cookie.lock().unwrap();
+            cache.set(c, Instant::now());
         }
     }
 
@@ -111,10 +168,12 @@ pub async fn start_proxy(
         agent_cookie,
     });
     // 仅 WS 端点走专用隧道 handler（三代端点名全注册，避免上游改名后再次失配）；
-    // /__dsh_theme 接收前端主题上报；其余回退到通用 HTTP handler。
-    let mut router = Router::new().route("/__dsh_theme", any(theme_handler));
+    // /__dsh_theme 接收前端主题上报；/__dsh_health 健康检查；其余回退到通用 HTTP handler。
+    let mut router = Router::new()
+        .route("/__dsh_theme", any(theme_handler))
+        .route("/__dsh_health", any(health_handler));
     for route in WS_ROUTES.iter() {
-        router = router.route(*route, any(ws_handler));
+        router = router.route(route, any(ws_handler));
     }
     let app = router.fallback(any(handler)).with_state(state);
 
@@ -158,7 +217,7 @@ async fn handshake_cookie(agent_port: u16, agent_token: &str) -> Option<String> 
     None
 }
 
-/// 惰性握手：若尚无 cookie，则尝试换取一次（用于启动时交换失败的场景）。
+/// 惰性握手：若尚无 cookie 或 cookie 已过期，则尝试换取一次。
 /// 修复（2026-09-01）：token 一律从 AppState 读取「实时」值，而非 ProxyState 启动时的
 /// 快照——stdout 解析可能在代理启动后才写入 agent_token，用快照会永远拿不到 cookie。
 async fn ensure_cookie(s: &Arc<ProxyState>) {
@@ -176,10 +235,20 @@ async fn ensure_cookie(s: &Arc<ProxyState>) {
     } else {
         live
     };
-    let has = s.agent_cookie.lock().unwrap().is_some();
-    if !has && !tok.is_empty() {
+    // 已有有效 cookie 则跳过（短锁：判定后立即释放 guard，避免持 MutexGuard 跨 await）
+    {
+        let cache = s.agent_cookie.lock().unwrap();
+        if cache.is_some() && !cache.is_expired() {
+            return;
+        }
+    }
+    if !tok.is_empty() {
         if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
-            *s.agent_cookie.lock().unwrap() = Some(c);
+            let mut cache = s.agent_cookie.lock().unwrap();
+            cache.set(c, Instant::now());
+        } else {
+            // 握手失败时清空，下次请求再重试（而非带着过期 cookie 反复失败）
+            s.agent_cookie.lock().unwrap().clear();
         }
     }
 }
@@ -191,14 +260,14 @@ async fn ensure_cookie(s: &Arc<ProxyState>) {
 async fn wait_cookie(s: &Arc<ProxyState>) -> String {
     ensure_cookie(s).await;
     for _ in 0..8 {
-        let cookie = s.agent_cookie.lock().unwrap().clone().unwrap_or_default();
-        if !cookie.is_empty() {
-            return cookie;
+        let cookie = s.agent_cookie.lock().unwrap().get();
+        if cookie.is_some() {
+            return cookie.unwrap_or_default();
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
         ensure_cookie(s).await;
     }
-    s.agent_cookie.lock().unwrap().clone().unwrap_or_default()
+    s.agent_cookie.lock().unwrap().get().unwrap_or_default()
 }
 
 /// 校验请求携带的 token（cookie `dsh_token` 或首次 query `t`）。
@@ -263,36 +332,72 @@ async fn handler(
         };
     let status = resp.status();
 
-    // 401 = 会话 cookie 过期或被拒：重新握手一次后重试（同样使用实时 token）
+    // 401 = 会话 cookie 过期或被拒：指数退避重试（最多 MAX_401_RETRIES 次）
     if status == StatusCode::UNAUTHORIZED {
-        let live = s
-            .app
-            .state::<AppState>()
-            .inner
-            .lock()
-            .unwrap()
-            .agent_token
-            .clone()
-            .unwrap_or_default();
-        let tok = if live.is_empty() {
-            s.agent_token.clone()
-        } else {
-            live
-        };
-        if !tok.is_empty() {
-            if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
-                *s.agent_cookie.lock().unwrap() = Some(c.clone());
-                let retry = match forward_upstream(&s, method, &uri, &headers, body, &c).await {
-                    Ok(r) => r,
-                    Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
-                };
-                return transform_upstream(retry, &theme, set_cookie.as_deref(), is_root).await;
-            }
-        }
-        return (StatusCode::UNAUTHORIZED, "harness auth required").into_response();
+        let resp = retry_with_backoff(&s, method, &uri, &headers, body, &cookie, is_root, &theme)
+            .await;
+        return resp;
     }
 
     transform_upstream(resp, &theme, set_cookie.as_deref(), is_root).await
+}
+
+/// 401 重试：指数退避，最多 MAX_401_RETRIES 次。
+/// 每次重试前重新握手获取新 cookie（解决 cookie 过期问题）。
+#[allow(clippy::too_many_arguments)] // 转发需透传 method/uri/headers/body/token/root/theme，超参边界可接受
+async fn retry_with_backoff(
+    s: &Arc<ProxyState>,
+    method: Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: Bytes,
+    _orig_cookie: &str,
+    is_root: bool,
+    theme: &Option<String>,
+) -> Response {
+    let live = s
+        .app
+        .state::<AppState>()
+        .inner
+        .lock()
+        .unwrap()
+        .agent_token
+        .clone()
+        .unwrap_or_default();
+    let tok = if live.is_empty() {
+        s.agent_token.clone()
+    } else {
+        live
+    };
+    if tok.is_empty() {
+        return (StatusCode::UNAUTHORIZED, "harness auth required").into_response();
+    }
+    let mut backoff_ms: u64 = 200;
+    for attempt in 1..=MAX_401_RETRIES {
+        // 每次重试前重新握手获取新 cookie
+        if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
+            // 短锁：set 后立即释放 guard，避免 MutexGuard 跨 await 使 future 非 Send
+            {
+                let mut cache = s.agent_cookie.lock().unwrap();
+                cache.set(c.clone(), Instant::now());
+            }
+            match forward_upstream(s, method.clone(), uri, headers, body.clone(), &c).await {
+                Ok(r) => {
+                    if r.status() != StatusCode::UNAUTHORIZED {
+                        return transform_upstream(r, theme, None, is_root).await;
+                    }
+                }
+                Err(e) => {
+                    return (StatusCode::BAD_GATEWAY, e).into_response();
+                }
+            }
+        }
+        if attempt < MAX_401_RETRIES {
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            backoff_ms *= 2; // 200ms → 400ms → 800ms
+        }
+    }
+    (StatusCode::UNAUTHORIZED, "harness auth required after retries").into_response()
 }
 
 /// 向上游 harness 转发一次请求，附上已 harvest 的会话 cookie（alpha.3+ 鉴权必需）。
@@ -462,9 +567,9 @@ async fn transform_upstream(
         // 抢在 <head> 开标签之后注入，保证 localStorage[KEY] 在插件 mount/restore 之前已就位。
         let mut insert_at: Option<usize> = None;
         if let Some(h) = bytes.windows(5).position(|w| w == b"<head") {
-            for i in h..bytes.len().min(h + 64) {
-                if bytes[i] == b'>' {
-                    insert_at = Some(i + 1);
+            for (i, b) in bytes[h..bytes.len().min(h + 64)].iter().enumerate() {
+                if *b == b'>' {
+                    insert_at = Some(h + i + 1);
                     break;
                 }
             }
@@ -495,6 +600,23 @@ async fn transform_upstream(
     builder
         .body(body)
         .unwrap_or((StatusCode::INTERNAL_SERVER_ERROR, "build response failed").into_response())
+}
+
+/// 健康检查端点：返回 200 表明代理自身运行正常（不依赖上游 harness 状态）。
+/// 可用于容器编排健康探针或人工诊断。
+async fn health_handler(State(s): State<Arc<ProxyState>>) -> Response {
+    let cookie_locked = s.agent_cookie.lock().unwrap();
+    let cookie_status = if cookie_locked.is_some() {
+        let expired = cookie_locked.is_expired();
+        format!("ok( expired={})", expired)
+    } else {
+        "stale(no cookie yet)".to_string()
+    };
+    let resp = format!(
+        "{{\"status\":\"ok\",\"agent_port\":{},\"cookie\":{},\"proxy_uptime\":\"healthy\"}}",
+        s.agent_port, cookie_status
+    );
+    (StatusCode::OK, resp).into_response()
 }
 
 /// 接收 SPA（angelina-themes 插件）上报的当前主题，持久化到 AppConfig.ui.theme（config.json）。
@@ -686,7 +808,7 @@ fn strip_proxy_token(pq: &str) -> String {
             let q = &q[1..];
             let kept: Vec<&str> = q
                 .split('&')
-                .filter(|p| p.splitn(2, '=').next().unwrap_or("") != "t")
+                .filter(|p| p.split('=').next().unwrap_or("") != "t")
                 .collect();
             if kept.is_empty() {
                 path.to_string()
@@ -697,7 +819,7 @@ fn strip_proxy_token(pq: &str) -> String {
     }
 }
 
-fn extract_query<'a>(query: &'a str, key: &str) -> Option<String> {
+fn extract_query(query: &str, key: &str) -> Option<String> {
     for pair in query.split('&') {
         let mut it = pair.splitn(2, '=');
         let k = it.next().unwrap_or("");

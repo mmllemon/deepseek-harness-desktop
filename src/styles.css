@@ -303,3 +303,50 @@ body {
 .msg-ok {
   color: var(--ok);
 }
+
+/* ---------- 诊断信息面板 ---------- */
+
+.diagnostics {
+  width: 100%;
+  max-width: 480px;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 4px;
+}
+
+.diag-row {
+  margin: 3px 0;
+  font-size: 12px;
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+
+.diag-row code {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.diag-error {
+  color: var(--err);
+}
+
+.diag-error code {
+  color: #ff7b72;
+}
+
+.diag-warn {
+  color: #d29922;
+}
+
+.diag-warn code {
+  color: #e3b341;
+}
+
+/* ---------- 错误边界 ---------- */
+
+.error-boundary {
+  border-color: color-mix(in srgb, var(--err) 50%, transparent);
+}

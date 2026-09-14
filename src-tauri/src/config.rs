@@ -4,7 +4,7 @@
 //! - API Key 仅经 OS keyring 持久化，spawn 时以环境变量注入子进程。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::Manager;
 
@@ -124,6 +124,7 @@ pub fn get_api_key() -> Option<String> {
     entry.get_password().ok().filter(|k| !k.is_empty())
 }
 
+#[allow(dead_code)] // 供未来「清除已保存密钥」设置入口调用
 pub fn clear_api_key() {
     if let Ok(entry) = keyring::Entry::new(KEYRING_SVC, KEYRING_USER) {
         let _ = entry.delete_credential();
@@ -131,7 +132,7 @@ pub fn clear_api_key() {
 }
 
 /// 构造 spawn `dsh` 子进程的环境变量（密钥经 env 注入，绝不落明文文件，见 §10.7）。
-pub fn build_env(cfg: &AppConfig, home: &PathBuf) -> HashMap<String, String> {
+pub fn build_env(cfg: &AppConfig, home: &Path) -> HashMap<String, String> {
     let mut env: HashMap<String, String> = HashMap::new();
     env.insert("DSH_HOME".into(), home.to_string_lossy().into_owned());
     env.insert("DSH_TELEMETRY_DISABLED".into(), "1".into());

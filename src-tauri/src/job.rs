@@ -5,6 +5,7 @@
 //! 非 Windows 平台本模块为空实现，由 Tauri 默认机制承担。
 
 #[cfg(windows)]
+#[allow(clippy::module_inception)] // job.rs 承载 job 模块，内部同名子模块提供 Windows 实现
 pub mod job {
     use std::ptr::null_mut;
 
