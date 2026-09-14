@@ -318,39 +318,85 @@ function Resolve-RealPackage {
     return $null
 }
 
-# Build a package-name -> real-dir map over a pnpm virtual store by reading each package.json.
-# Resolve-RealPackage falls back to this because pnpm hashes over-long store directory names.
-function Build-VirtualStoreIndex {
+# Honour a package's npm "os"/"cpu" fields against the CURRENT runner, so Linux-only workspace
+# sub-packages (e.g. the landlock-run prebuilt binaries) are never pulled into a Windows bundle.
+# Supports both allow-lists ("linux") and deny-lists ("!win32").
+function Test-PlatformCompatible {
+    param($PkgJson)
+    $osNow = 'win32'
+    if ($env:OS -ne 'Windows_NT') {
+        $osNow = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX)) { 'darwin' } else { 'linux' }
+    }
+    $cpuNow = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLower()
+    foreach ($pair in @(@('os', $osNow), @('cpu', $cpuNow))) {
+        $field = $pair[0]; $now = $pair[1]
+        $prop = $PkgJson.PSObject.Properties[$field]
+        if (-not $prop -or -not $prop.Value) { continue }
+        $allow = @(); $deny = @()
+        foreach ($v in @($prop.Value)) {
+            if ("$v".StartsWith('!')) { $deny += "$v".Substring(1) } else { $allow += "$v" }
+        }
+        if ($deny -contains $now) { return $false }
+        if ($allow.Count -gt 0 -and ($allow -notcontains $now)) { return $false }
+    }
+    return $true
+}
+
+# Build a package-name -> real-dir map used by Resolve-RealPackage as a content index.
+# Two sources, because a pnpm workspace keeps packages in two very different places:
+#   1) the .pnpm virtual store (third-party deps; dirs may be hash-truncated, so the only
+#      reliable key is each package.json's real "name");
+#   2) the workspace SOURCE tree (apps/ packages/ vendor/ native/). Workspace deps are
+#      symlinked and never stored in .pnpm, so the virtual-store pass alone cannot see them.
+#      Missing (2) is why @deepseek-ai/node-addon-landlock-run (native/landlock-run/packages/
+#      entry) was silently skipped and the harness loader aborted with ERR_MODULE_NOT_FOUND.
+# Platform-mismatched packages are excluded so Linux-only siblings stay out of a Windows bundle.
+function Build-PackageIndex {
     param([string]$Base)
     $map = @{}
+    # (1) .pnpm virtual store
     $store = Join-Path $Base 'node_modules/.pnpm'
-    if (-not (Test-Path -LiteralPath $store)) { return $map }
-    foreach ($d in (Get-ChildItem -LiteralPath $store -Directory -ErrorAction SilentlyContinue)) {
-        $inner = Join-Path $d.FullName 'node_modules'
-        if (-not (Test-Path -LiteralPath $inner)) { continue }
-        foreach ($nm in (Get-ChildItem -LiteralPath $inner -Directory -ErrorAction SilentlyContinue)) {
-            $cands = if ($nm.Name -like '@*') { Get-ChildItem -LiteralPath $nm.FullName -Directory -ErrorAction SilentlyContinue } else { @($nm) }
-            foreach ($c in $cands) {
-                $pj = Join-Path $c.FullName 'package.json'
-                if (-not (Test-Path -LiteralPath $pj)) { continue }
-                try { $p = Get-Content -LiteralPath $pj -Raw | ConvertFrom-Json } catch { continue }
-                if ($p.PSObject.Properties['name'] -and $p.name) { $map[$p.name] = $c.FullName }
+    if (Test-Path -LiteralPath $store) {
+        foreach ($d in (Get-ChildItem -LiteralPath $store -Directory -ErrorAction SilentlyContinue)) {
+            $inner = Join-Path $d.FullName 'node_modules'
+            if (-not (Test-Path -LiteralPath $inner)) { continue }
+            foreach ($nm in (Get-ChildItem -LiteralPath $inner -Directory -ErrorAction SilentlyContinue)) {
+                $cands = if ($nm.Name -like '@*') { Get-ChildItem -LiteralPath $nm.FullName -Directory -ErrorAction SilentlyContinue } else { @($nm) }
+                foreach ($c in $cands) {
+                    $pj = Join-Path $c.FullName 'package.json'
+                    if (-not (Test-Path -LiteralPath $pj)) { continue }
+                    try { $p = Get-Content -LiteralPath $pj -Raw | ConvertFrom-Json } catch { continue }
+                    if ($p.PSObject.Properties['name'] -and $p.name) { $map[$p.name] = $c.FullName }
+                }
             }
         }
+    }
+    # (2) workspace source tree -- includes native/, which the deploy-promotion scan also misses
+    foreach ($section in @('apps', 'packages', 'vendor', 'native')) {
+        $root = Join-Path $Base $section
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        Get-ChildItem -LiteralPath $root -Recurse -Filter package.json -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } | ForEach-Object {
+                try { $p = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json } catch { return }
+                if (-not ($p.PSObject.Properties['name'] -and $p.name)) { return }
+                if (-not (Test-PlatformCompatible -PkgJson $p)) { return }
+                $map[$p.name] = $_.Directory.FullName
+            }
     }
     return $map
 }
 
-# Build the source-side virtual-store name index ONCE; every Resolve-RealPackage on the harness
-# dir passes it, because pnpm hashes over-long store dir names (truncation cuts inside the
-# package name) and only each package.json's real "name" field is a reliable lookup key.
-Write-Host "==> building pnpm virtual-store index from harness source"
-$vsIndex = Build-VirtualStoreIndex -Base $hDir
-Write-Host "   virtual-store index entries: $($vsIndex.Count)"
+# Build the source-side package index ONCE (virtual store + workspace tree); every
+# Resolve-RealPackage on the harness dir passes it, because pnpm hashes over-long store dir
+# names (truncation cuts inside the package name) and workspace deps never land in .pnpm --
+# only each package.json's real "name" field is a reliable lookup key.
+Write-Host "==> building source package index (virtual store + workspace tree)"
+$pkgIndex = Build-PackageIndex -Base $hDir
+Write-Host "   source package index entries: $($pkgIndex.Count)"
 
 Write-Host "==> native-build sync into dsh-dist"
 foreach ($m in @('koffi', 'node-pty')) {
-    $srcPkg = Resolve-RealPackage -Base $hDir -Name $m -Index $vsIndex
+    $srcPkg = Resolve-RealPackage -Base $hDir -Name $m -Index $pkgIndex
     $dstPkg = Resolve-RealPackage -Base $outAbs -Name $m
     if (-not $dstPkg) { Write-Error "$m missing from dsh-dist after deploy"; exit 1 }
     if (-not $srcPkg) { Write-Warning "  $m build artifacts not found in source store -- skip sync"; continue }
@@ -498,7 +544,7 @@ function Sync-PluginDependencyClosure {
     Write-Host "   plugin dependency closure sync done ($($seen.Count) packages scanned)"
 }
 Write-Host "==> syncing plugin runtime dependency closure into dsh-dist"
-Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs -Index $vsIndex
+Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs -Index $pkgIndex
 
 # ---------------------------------------------------------------------------
 # STEP 6.7: Materialize dsh-dist as REAL files, then strip the residual .pnpm
@@ -553,6 +599,23 @@ foreach ($m in @('node-pty', 'koffi', 'sharp', 'chokidar', 'resolve.exports')) {
     }
     Write-Host "   verified native/runtime module present: $m"
 }
+
+# @deepseek-ai/dsh-sandbox-local STATICALLY imports @deepseek-ai/node-addon-landlock-run at
+# loader time. That package is a WORKSPACE package under native/landlock-run/packages/entry --
+# neither promoted into the deploy closure nor present in .pnpm -- so the runtime dep closure
+# sync must materialize it from the workspace tree (see Build-PackageIndex). Its runtime is
+# Linux-only, but the JS seam must be importable on Windows (it probes and fails closed).
+# Absent => the harness aborts at startup with ERR_MODULE_NOT_FOUND (smoke gate (b)).
+$landlock = Join-Path $outAbs 'node_modules/@deepseek-ai/node-addon-landlock-run'
+if (-not (Test-Path -LiteralPath (Join-Path $landlock 'package.json'))) {
+    Write-Error "sandbox runtime dep missing: $landlock -- workspace package not synced (Build-PackageIndex must cover native/)"
+    exit 1
+}
+if (-not (Test-Path -LiteralPath (Join-Path $landlock 'lib/index.js'))) {
+    Write-Error "sandbox runtime dep has no built entry: $landlock/lib/index.js -- harness build did not compile native/landlock-run/packages/entry"
+    exit 1
+}
+Write-Host "   verified sandbox runtime dep present: @deepseek-ai/node-addon-landlock-run"
 
 # pi-ai ships a hidden data manifest (.manifest.json) that its loader requires() at runtime.
 # upload-artifact@v4 drops dot-files by default, so CI MUST set include-hidden-files: true on

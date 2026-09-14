@@ -69,6 +69,28 @@ for any regressions found.
   **Upgrade note**: If upstream fixes the migration, the regex match in this patch will
   fail and `bundle-dsh.ps1` will error out — remove the patch and re-release.
 
+## PATCH-05: Resolve workspace packages from the full source tree (incl. `native/`)
+
+- **Why**: `pnpm deploy --prod` materializes only the deploy entry's closure, and workspace
+  deps are *symlinked*, never stored in `.pnpm`. The bundler's promotion scan covered only
+  `apps/`, `packages/`, `vendor/`, and `Resolve-RealPackage` looked only at top-level
+  `node_modules` + `.pnpm` — so a workspace dep living under `native/` was invisible.
+  Concrete failure (smoke gate (b), run 34792641045): `@deepseek-ai/dsh-sandbox-local`
+  statically imports `@deepseek-ai/node-addon-landlock-run`, which lives at
+  `native/landlock-run/packages/entry` (a pure-JS seam; only its runtime is Linux-only).
+  It was skipped as "not resolvable in source store (platform-specific optional?)" and the
+  harness aborted at startup with `ERR_MODULE_NOT_FOUND`.
+- **Fix**: `Build-PackageIndex` (formerly `Build-VirtualStoreIndex`) now indexes BOTH the
+  `.pnpm` virtual store AND the workspace source tree (`apps/`, `packages/`, `vendor/`,
+  `native/`), keyed by each `package.json`'s real `name`. `Test-PlatformCompatible` honours
+  npm `os`/`cpu` (allow- and deny-lists) so Linux-only siblings
+  (`node-addon-landlock-run-linux-x64` / `-arm64`) never enter a Windows bundle. A hard gate
+  fails the bundle early if `@deepseek-ai/node-addon-landlock-run` is absent or has no built
+  `lib/index.js`, instead of aborting later at smoke.
+- **Upstream issue**: None filed — `pnpm deploy` + symlinked workspace packages is by design.
+- **Verify**: `dsh-dist/node_modules/@deepseek-ai/node-addon-landlock-run/lib/index.js`
+  exists, and smoke gate (b) starts the harness without `ERR_MODULE_NOT_FOUND`.
+
 ---
 
 ## Upgrade Checklist
