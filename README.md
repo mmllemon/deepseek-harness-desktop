@@ -37,7 +37,23 @@ deepseek-harness-desktop/
 ## 安全约束（实现要点）
 - sidecar 仅能由 Rust 以固定参数 `[<bin.js>, "web", "--port", <port>]` 启动，能力白名单用正则校验（入口须以 `bin.js` 结尾、端口为数字），见 `capabilities/default.json` 与 `src-tauri/src/sidecar.rs`。
 - 主窗口已恢复最小 CSP 并声明 loopback 远程源（`http://127.0.0.1:*` / `http://localhost:*`），密钥经 env 注入、WebView 反代带随机会话 token，见 `tauri.conf.json` 与 `src-tauri/src/{config,proxy}.rs`。
-- 安装包内嵌 WebView2 离线安装器（`offlineInstaller`），故**安装包约 330 MB**；如需更小体积可改 `downloadBootstrapper`（代价：安装时需联网）。
+- 安装包使用 `webviewInstallMode = downloadBootstrapper`（**不**内嵌 WebView2 离线安装器），
+  因此不再多出 ~120 MB；代价是安装时需联网引导 WebView2 运行时。改回内嵌可离线安装，但体积显著增大。
+
+## 运行时加固（孤儿写者锁自愈）
+- 背景：上游 `@deepseek-ai/dsh-atomic-write` 用兄弟文件 `<file>.lock`（内容 = 持有者 PID）
+  做跨进程写者互斥，默认等 2 秒即失败，且**明确规定孤儿锁的恢复属于运维动作**。
+  sidecar 一旦被强杀（taskkill / 应用崩溃 / 宿主进程树被回收），锁就会永久残留，
+  此后每次启动都在 2 秒后超时退出 —— 用户侧表现为窗口能开、进程长活，
+  但 UI 永久停在「正在启动 Agent…」且无任何报错（2026-09-14 实机 P0）。
+- 加固：`src-tauri/src/sidecar.rs` 的 `heal_stale_locks()` 在 `spawn_dsh()` 之前扫描
+  `$DSH_HOME` 下的 `*.lock`，仅当**锁内 PID 已退出**且文件年龄 > 5 秒时，将其
+  **改名备份**为 `<原名>.orphan.bak_<UTC 时间戳>`（不删除，现场可人工恢复），
+  并通过 `agent://log`（`stream = "system"`）上报前端。
+- 保守性：活锁（PID 存活 / PID 为 0 / PID 为自身）绝不触碰；内容无法解析为 PID 的锁跳过；
+  `node_modules`、`.pnpm`、`target`、`dist` 等目录不递归；受深度（6）与条目数（20000）双重约束。
+- 回归闸门：CI `rust-check` job 执行 `cargo test --lib`，覆盖
+  「死 PID 隔离 / 活锁保留 / 新锁年龄保护 / 跳过目录与不可解析内容不误伤」四个场景。
 
 ## 已知限制
 - 执行 `tauri build` / 出安装包需要 **Windows + Rust (MSVC) + WebView2 SDK** 环境；CI 已封装好，本地一般无需手动出包。

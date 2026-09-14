@@ -109,6 +109,15 @@ jobs:
         working-directory: D:\wb\src-tauri
         run: cargo check --all-targets --all-features
 
+      # 回归闸门：孤儿写者锁自愈（src/sidecar.rs `heal_stale_locks`）。
+      # 这是 2026-09-14 实机 P0（应用永久卡「正在启动 Agent…」）的修复，
+      # 其判定逻辑是纯文件系统 + PID 存活检查，可在 CI 上完整覆盖：
+      # 死 PID 隔离 / 活锁保留 / 新锁年龄保护 / 跳过目录与不可解析内容不误伤。
+      - name: cargo test (self-heal regression gate)
+        shell: pwsh
+        working-directory: D:\wb\src-tauri
+        run: cargo test --lib -- --test-threads=1
+
       - name: cargo clippy (lint check)
         shell: pwsh
         working-directory: D:\wb\src-tauri
