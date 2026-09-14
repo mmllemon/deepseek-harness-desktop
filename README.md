@@ -55,6 +55,23 @@ deepseek-harness-desktop/
 - 回归闸门：CI `rust-check` job 执行 `cargo test --lib`，覆盖
   「死 PID 隔离 / 活锁保留 / 新锁年龄保护 / 跳过目录与不可解析内容不误伤」四个场景。
 
+## 运行时加固（冷启动自愈引导页）
+- 背景（2026-09-14 实机）：**新装 / 升级后的首次启动**时，上游 harness 要先完成初始化
+  （生成 `.credentials.yaml` 签名密钥、编译 profile 等），其可服务时刻可能明显晚于代理启动。
+  此时 WebView 的首次导航会撞上「会话 cookie 尚未 harvest」，而代理原先直接回一行
+  `502 harness auth cookie unavailable` **纯文本** —— 浏览器会把它当成最终页面，
+  既不解析 HTML 也**不会自动重试**，UI 就此永久停在加载态（只能人工重启）。
+- 加固：`src-tauri/src/proxy.rs` 对「根路径 + `Accept: text/html`」的**页面导航**请求
+  改走 `boot_page_response()` —— 返回一个自带轮询的引导页（每 800ms 查 `/__dsh_health`，
+  `ready=true` 即 `location.replace` 回原 URL，保留 `?t=` token），
+  把「一次性失败」变成「自动等待、就绪即接管」；约 3 分钟仍不可用才降级为「重试」按钮。
+  非导航请求（SPA 的 fetch/XHR）行为不变，仍走原有错误码，避免污染接口语义。
+- 配套：`/__dsh_health` 新增 `ready` 字段（已 harvest 且未过期），并修正该端点此前输出
+  **非法 JSON** 的问题（cookie 值未加引号）；`src/App.tsx` 增加状态兜底轮询 ——
+  Tauri 事件不缓存，若 sidecar 在 React 订阅前就绪会丢失 `agent://ready`。
+- 回归闸门：`cargo test --lib` 新增 4 个用例（`wants_html` 判定 / 引导页回跳目标与轮询特征 /
+  内联 JSON 转义 / health 载荷为合法 JSON 且 ready 语义正确）。
+
 ## 已知限制
 - 执行 `tauri build` / 出安装包需要 **Windows + Rust (MSVC) + WebView2 SDK** 环境；CI 已封装好，本地一般无需手动出包。
 - `dsh web` 就绪行格式依赖实际 harness 输出（`http://127.0.0.1:<port>`），smoke 与其对齐。

@@ -246,9 +246,36 @@ export default function App() {
       }
     }
 
+    // 兜底轮询（2026-09-14）：Tauri 事件**不缓存**——若 sidecar 在 React 完成订阅之前
+    // 就已就绪，`agent://ready` 会永久丢失；而首次 getStatus() 也可能早于就绪返回 starting。
+    // 两者叠加就会让界面永久停在「正在启动 Agent…」（冷启动时上游初始化慢，尤其容易撞上）。
+    // 这里每 2 秒补查一次状态，一旦 running 立即导航；navigate 自带一次性守卫，重复调用安全。
+    let pollTimer: ReturnType<typeof setTimeout> | undefined
+    let pollCount = 0
+    const MAX_POLLS = 300 // ≈ 10 分钟，超时后交给离线面板的手动「重试」
+    const pollState = async () => {
+      if (disposed || navigated.current) return
+      if (++pollCount > MAX_POLLS) return
+      try {
+        const st = await getStatus()
+        if (disposed || navigated.current) return
+        setStatus(st)
+        if (st.state === 'running' && st.proxyUrl) {
+          resetReconnectCount()
+          navigate(st.proxyUrl)
+          return
+        }
+      } catch {
+        /* 瞬时 IPC 失败忽略，下个周期继续 */
+      }
+      pollTimer = setTimeout(pollState, 2000)
+    }
+    pollTimer = setTimeout(pollState, 3000)
+
     void boot()
     return () => {
       disposed = true
+      if (pollTimer !== undefined) clearTimeout(pollTimer)
       unlistens.forEach((un) => un())
     }
   }, [navigate])
