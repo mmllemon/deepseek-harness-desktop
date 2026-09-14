@@ -501,12 +501,30 @@ Write-Host "==> syncing plugin runtime dependency closure into dsh-dist"
 Sync-PluginDependencyClosure -HarnessDir $hDir -OutDir $outAbs -Index $vsIndex
 
 # ---------------------------------------------------------------------------
-# STEP 6.7: Strip residual .pnpm virtual-store structure and verify the deployed
-#   tree is fully materialized. A symlink/junction left inside dsh-dist would
-#   dangle once the source checkout is gone at install time; the artifact must be
-#   self-contained real files only.
+# STEP 6.7: Materialize dsh-dist as REAL files, then strip the residual .pnpm
+#   virtual-store structure.
+#
+# Why: `pnpm deploy --legacy` still lays down the top-level node_modules as
+#   junctions/symlinks INTO .pnpm/<pkg>@<ver>/node_modules/<pkg> (observed: 266
+#   links right after deploy), so naively deleting .pnpm leaves every top-level
+#   link dangling. robocopy /E dereferences each reparse point into a plain
+#   file/dir copy (verified locally), so we re-materialize the whole tree through
+#   a staging dir, swap it in, and only then drop .pnpm. A junction left inside
+#   dsh-dist would dangle once the source checkout is gone at install time; the
+#   artifact must be self-contained real files only.
 # Verification: this step fails the build if any reparse point remains in dsh-dist.
 # ---------------------------------------------------------------------------
+Write-Host "==> materializing dsh-dist as real files (dereference junctions/symlinks)"
+$staging = Join-Path (Split-Path -Parent $outAbs) ((Split-Path -Leaf $outAbs) + '-real')
+if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+robocopy $outAbs $staging /E /COPY:DAT /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+if ($LASTEXITCODE -ge 8) {
+    Write-Error "robocopy dereference failed (exit $LASTEXITCODE) -- dsh-dist not materialized as real files"
+    exit 1
+}
+Remove-Item -LiteralPath $outAbs -Recurse -Force
+Move-Item -LiteralPath $staging -Destination $outAbs
+
 Write-Host "==> stripping .pnpm virtual store from dsh-dist"
 $pnpmStore = Join-Path $outAbs 'node_modules/.pnpm'
 if (Test-Path -LiteralPath $pnpmStore) {
