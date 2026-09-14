@@ -291,18 +291,33 @@ async fn wait_cookie(s: &Arc<ProxyState>) -> String {
     s.agent_cookie.lock().unwrap().get().unwrap_or_default()
 }
 
-/// 根页面导航专用的「快速」cookie 获取：最多花约 3 秒。
+/// 根页面导航专用的「快速」cookie 获取：最多约 8 秒（拿到即返回）。
 ///
-/// 与 `wait_cookie`（最多 8 轮 × 每次最长 10 秒握手）不同，这里**主动快速失败**，
-/// 把继续等待的责任交给自愈引导页里的 JS 轮询（见 `boot_page_response`）。
-/// 原因：冷启动时上游可能数十秒不可用，若让 WebView 的首个导航请求同步挂那么久，
-/// 用户只会看到一个长时间空白的窗口。
+/// 为什么是 8 秒而不是 3 秒（2026-09-14 实机回归）：
+/// TCP 回退探测可能在 **stdout 解析出 launch token 之前**就触发 `on_ready`，
+/// 此时代理启动快照里的 token 为空（见 `on_ready` 的注释）。之后 launch token 才落盘，
+/// `ensure_cookie` 才能用「实时」token 换取 cookie。
+/// 3 秒窗口会在这个空档里超时 → 一律落到引导页；而引导页当时只轮询 `/__dsh_health`
+/// → 死锁（连热重启都救不回来，比引导页之前更糟）。
+/// 实测 8 秒足以覆盖 token 落盘的延迟，又不至于让窗口长时间空白；
+/// 真正慢的上游仍由引导页兜底（引导页现在会自己驱动握手，见 `health_handler`）。
 async fn wait_cookie_brief(s: &Arc<ProxyState>) -> String {
     if let Some(c) = { s.agent_cookie.lock().unwrap().get() } {
         return c;
     }
-    let _ = tokio::time::timeout(Duration::from_secs(3), ensure_cookie(s)).await;
-    s.agent_cookie.lock().unwrap().get().unwrap_or_default()
+    // 每次只做「一次」握手尝试（不动用 `ensure_cookie` 的 10 秒重试预算），
+    // 用有界外层循环轮询，保证总耗时可控、且在下游不可达时能立刻失败重试。
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        ensure_cookie_with(s, 1).await;
+        if let Some(c) = s.agent_cookie.lock().unwrap().get() {
+            return c;
+        }
+        if Instant::now() >= deadline {
+            return String::new();
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
 }
 
 /// 判断这是浏览器「导航到页面」的请求（`Accept` 含 `text/html`），

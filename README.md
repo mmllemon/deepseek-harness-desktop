@@ -77,8 +77,12 @@ deepseek-harness-desktop/
   2. 引导页在轮询之外，每 4 次（约 3.2 s）用 `HEAD` **真敲一次原地址** —— 这条请求与浏览器导航
      走同一条处理路径（含 token 校验与握手），因此即使该端点的语义将来变化，引导页也一定能收敛，
      不把成败押在单一「就绪标志」上。
-  另：`/__dsh_health` 增加 `agent_token` 布尔字段，用于区分「上游还没起来」与「launch token 没解析到」
-  （后者单靠握手重试永远好不了）。
+  3. 页面导航的等待窗口从 **3 秒放宽到 8 秒**（`wait_cookie_brief`，拿到即返回）。原因：TCP 回退探测
+     可能在 stdout 解析出 launch token 之前就触发 `on_ready`，代理启动快照里 token 为空，之后才落盘 ——
+     3 秒窗口会在这个空档里超时，于是**每次启动都落到引导页**；8 秒足以覆盖该延迟，
+     真正慢的上游仍由引导页兜底。
+  - 另：`/__dsh_health` 增加 `agent_token` 布尔字段，用于区分「上游还没起来」与「launch token 没解析到」
+    （后者单靠握手重试永远好不了）。
 - 回归闸门：`cargo test --lib` 覆盖 `wants_html` 判定 / 引导页回跳目标与轮询特征 /
   **周期性 HEAD 冗余探活** / 内联 JSON 转义 / health 载荷为合法 JSON 且 ready、agent_token 语义正确。
 
