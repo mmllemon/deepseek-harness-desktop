@@ -187,11 +187,18 @@ pub async fn start_proxy(
     Ok((proxy_port, proxy_url))
 }
 
-/// 向上游 harness 发起一次 launch-token 交换，返回 `name=value` 形式的会话 cookie。
+/// 向上游 harness 发起 launch-token 交换，返回 `name=value` 形式的会话 cookie。
 /// harness 在 `GET /?token=<launchToken>` 时返回 303 + Set-Cookie（HttpOnly, SameSite=Strict）。
 /// 该 cookie 由 harness 用 `$DSH_HOME/.credentials.yaml` 中的密钥签名，桌面无法伪造，必须换取。
 /// cookie 名 = `dsh-auth-` + base64url(sha256(Host))，因此请求 Host 必须与交换时一致（127.0.0.1:<port>）。
-async fn handshake_cookie(agent_port: u16, agent_token: &str) -> Option<String> {
+///
+/// `attempts`：允许调用方控制重试预算 —— 页面请求用 20 次（约 10s），
+/// `/__dsh_health` 轮询用 1 次（每次轮询只敲一次，避免把轮询变成阻塞的 10s 重试）。
+async fn handshake_cookie_attempts(
+    agent_port: u16,
+    agent_token: &str,
+    attempts: u32,
+) -> Option<String> {
     if agent_token.is_empty() {
         return None;
     }
@@ -200,7 +207,7 @@ async fn handshake_cookie(agent_port: u16, agent_token: &str) -> Option<String> 
         .build()
         .ok()?;
     let url = format!("http://127.0.0.1:{}/?token={}", agent_port, agent_token);
-    for _ in 0..20 {
+    for _ in 0..attempts {
         if let Ok(resp) = client.get(&url).send().await {
             if let Some(sc) = resp.headers().get(reqwest::header::SET_COOKIE) {
                 if let Ok(s) = sc.to_str() {
@@ -217,10 +224,15 @@ async fn handshake_cookie(agent_port: u16, agent_token: &str) -> Option<String> 
     None
 }
 
-/// 惰性握手：若尚无 cookie 或 cookie 已过期，则尝试换取一次。
-/// 修复（2026-09-01）：token 一律从 AppState 读取「实时」值，而非 ProxyState 启动时的
-/// 快照——stdout 解析可能在代理启动后才写入 agent_token，用快照会永远拿不到 cookie。
-async fn ensure_cookie(s: &Arc<ProxyState>) {
+async fn handshake_cookie(agent_port: u16, agent_token: &str) -> Option<String> {
+    handshake_cookie_attempts(agent_port, agent_token, 20).await
+}
+
+/// 取「当前」的 harness launch token：优先 AppState 实时值，回退到代理启动时的快照。
+///
+/// 修复（2026-09-01）：不能用启动快照——stdout 解析可能在代理启动后才写入 agent_token，
+/// 用快照会永远拿不到 cookie。
+fn live_agent_token(s: &Arc<ProxyState>) -> String {
     let live = s
         .app
         .state::<AppState>()
@@ -230,11 +242,16 @@ async fn ensure_cookie(s: &Arc<ProxyState>) {
         .agent_token
         .clone()
         .unwrap_or_default();
-    let tok = if live.is_empty() {
+    if live.is_empty() {
         s.agent_token.clone()
     } else {
         live
-    };
+    }
+}
+
+/// 惰性握手：若尚无 cookie 或 cookie 已过期，则尝试换取。
+async fn ensure_cookie_with(s: &Arc<ProxyState>, attempts: u32) {
+    let tok = live_agent_token(s);
     // 已有有效 cookie 则跳过（短锁：判定后立即释放 guard，避免持 MutexGuard 跨 await）
     {
         let cache = s.agent_cookie.lock().unwrap();
@@ -243,7 +260,7 @@ async fn ensure_cookie(s: &Arc<ProxyState>) {
         }
     }
     if !tok.is_empty() {
-        if let Some(c) = handshake_cookie(s.agent_port, &tok).await {
+        if let Some(c) = handshake_cookie_attempts(s.agent_port, &tok, attempts).await {
             let mut cache = s.agent_cookie.lock().unwrap();
             cache.set(c, Instant::now());
         } else {
@@ -251,6 +268,10 @@ async fn ensure_cookie(s: &Arc<ProxyState>) {
             s.agent_cookie.lock().unwrap().clear();
         }
     }
+}
+
+async fn ensure_cookie(s: &Arc<ProxyState>) {
+    ensure_cookie_with(s, 20).await;
 }
 
 /// 等待会话 cookie 就绪：先惰性握手一次，再有界等待（最多约 3.2s）。
@@ -270,18 +291,33 @@ async fn wait_cookie(s: &Arc<ProxyState>) -> String {
     s.agent_cookie.lock().unwrap().get().unwrap_or_default()
 }
 
-/// 根页面导航专用的「快速」cookie 获取：最多花约 3 秒。
+/// 根页面导航专用的「快速」cookie 获取：最多约 8 秒（拿到即返回）。
 ///
-/// 与 `wait_cookie`（最多 8 轮 × 每次最长 10 秒握手）不同，这里**主动快速失败**，
-/// 把继续等待的责任交给自愈引导页里的 JS 轮询（见 `boot_page_response`）。
-/// 原因：冷启动时上游可能数十秒不可用，若让 WebView 的首个导航请求同步挂那么久，
-/// 用户只会看到一个长时间空白的窗口。
+/// 为什么是 8 秒而不是 3 秒（2026-09-14 实机回归）：
+/// TCP 回退探测可能在 **stdout 解析出 launch token 之前**就触发 `on_ready`，
+/// 此时代理启动快照里的 token 为空（见 `on_ready` 的注释）。之后 launch token 才落盘，
+/// `ensure_cookie` 才能用「实时」token 换取 cookie。
+/// 3 秒窗口会在这个空档里超时 → 一律落到引导页；而引导页当时只轮询 `/__dsh_health`
+/// → 死锁（连热重启都救不回来，比引导页之前更糟）。
+/// 实测 8 秒足以覆盖 token 落盘的延迟，又不至于让窗口长时间空白；
+/// 真正慢的上游仍由引导页兜底（引导页现在会自己驱动握手，见 `health_handler`）。
 async fn wait_cookie_brief(s: &Arc<ProxyState>) -> String {
     if let Some(c) = { s.agent_cookie.lock().unwrap().get() } {
         return c;
     }
-    let _ = tokio::time::timeout(Duration::from_secs(3), ensure_cookie(s)).await;
-    s.agent_cookie.lock().unwrap().get().unwrap_or_default()
+    // 每次只做「一次」握手尝试（不动用 `ensure_cookie` 的 10 秒重试预算），
+    // 用有界外层循环轮询，保证总耗时可控、且在下游不可达时能立刻失败重试。
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        ensure_cookie_with(s, 1).await;
+        if let Some(c) = s.agent_cookie.lock().unwrap().get() {
+            return c;
+        }
+        if Instant::now() >= deadline {
+            return String::new();
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
 }
 
 /// 判断这是浏览器「导航到页面」的请求（`Accept` 含 `text/html`），
@@ -359,6 +395,7 @@ fn boot_page_response(uri: &Uri, reason: &str) -> Response {
   }}
   function next(){{
     n++;
+    if(n%4===0){{ nudge(); }}
     if(n===40){{ document.getElementById('warn').style.display='block'; }}
     if(n>=MAXWAIT){{ giveUp(); return; }}
     setTimeout(poll, 800);
@@ -368,6 +405,12 @@ fn boot_page_response(uri: &Uri, reason: &str) -> Response {
       .then(function(r){{return r.json()}})
       .then(function(j){{ if(j&&j.ready===true){{ location.replace(TARGET); return; }} next(); }})
       .catch(function(){{ next(); }});
+  }}
+  // 每 4 次轮询（约 3.2s）用 HEAD 真敲一次页面地址：这条请求与浏览器导航走
+  // **同一条**处理路径（含 token 校验与会话握手），因此即使 `/__dsh_health` 的
+  // 语义将来变了，引导页也一定能收敛——不把成败押在单一「就绪标志」上。
+  function nudge(){{
+    try {{ fetch(TARGET, {{method:'HEAD', cache:'no-store'}}).catch(function(){{}}); }} catch(e) {{}}
   }}
   setTimeout(poll, 500);
 }})();
@@ -752,7 +795,14 @@ async fn transform_upstream(
 /// 「上游可服务」，然后 `location.replace` 回真正的界面。
 /// 顺带修复：原实现的 cookie 值未经引号包裹，产出的是**非法 JSON**
 /// （形如 `"cookie":ok( expired=false)`），任何 JSON 解析器都会失败。
+///
+/// **循环依赖修复（2026-09-14 实机复现）**：`ready` 取决于会话 cookie 是否已 harvest，
+/// 而 harvest 只发生在 `handler` 的页面请求路径上。引导页却**只轮询本端点、不再请求页面**
+/// ——于是「等一个只有它自己去请求页面才会变的标志」，**永远等不到**：
+/// 实机表现为 `/__dsh_health` 连续 180s 返回 `"cookie":"absent"`，引导页永不跳转。
+/// 因此本端点必须**自己驱动一次握手**（单次尝试，轮询开销恒定、秒级收敛）。
 async fn health_handler(State(s): State<Arc<ProxyState>>) -> Response {
+    ensure_cookie_with(&s, 1).await;
     let (has_cookie, expired) = {
         let c = s.agent_cookie.lock().unwrap();
         (c.is_some(), c.is_expired())
@@ -763,9 +813,13 @@ async fn health_handler(State(s): State<Arc<ProxyState>>) -> Response {
         (true, true) => "expired",
         (false, _) => "absent",
     };
+    // has_agent_token：仅布尔值，便于判断「上游 launch token 是否已解析出来」，
+    // 用于区分「上游还没起来」与「token 没解析到」（后者单靠握手重试永远好不了）。
+    let has_agent_token = !live_agent_token(&s).is_empty();
     let resp = format!(
-        "{{\"status\":\"ok\",\"ready\":{},\"agent_port\":{},\"cookie\":\"{}\",\"proxy_uptime\":\"healthy\"}}",
-        ready, s.agent_port, cookie_status
+        "{{\"status\":\"ok\",\"ready\":{},\"agent_port\":{},\"cookie\":\"{}\",\
+         \"agent_token\":{},\"proxy_uptime\":\"healthy\"}}",
+        ready, s.agent_port, cookie_status, has_agent_token
     );
     (StatusCode::OK, resp).into_response()
 }
@@ -1080,6 +1134,17 @@ mod tests {
         assert!(html.contains("/__dsh_health"), "应轮询健康端点");
         assert!(html.contains("j.ready===true"), "应以 ready 作为接管判据");
         assert!(html.contains("等待上游鉴权会话就绪…"), "应显示失败原因");
+        // 回归护栏（2026-09-14 实机死锁修复）：引导页必须在「轮询就绪标志」之外，
+        // **再直接敲一次真实页面地址**。只靠标志会让引导页等一个「只有它自己去请求
+        // 页面才会翻真」的位 → 永远等不到（实机 180s 全程 ready=false）。
+        assert!(
+            html.contains("fetch(TARGET, {method:'HEAD', cache:'no-store'})"),
+            "引导页必须周期性 HEAD 真实地址（带 token），不能只依赖 /__dsh_health 标志"
+        );
+        assert!(
+            html.contains("if(n%4===0){ nudge(); }"),
+            "HEAD 探活应随轮询周期性触发"
+        );
     }
 
     /// 回跳目标与原因文本都经 JSON 转义，避免引号/反斜杠破坏内联脚本。
@@ -1121,14 +1186,17 @@ mod tests {
                 (false, _) => "absent",
             };
             // 与 health_handler 相同的拼装逻辑（handler 需要 AppHandle，单测无法构造）
+            let has_agent_token = true;
             let payload = format!(
-                "{{\"status\":\"ok\",\"ready\":{},\"agent_port\":{},\"cookie\":\"{}\",\"proxy_uptime\":\"healthy\"}}",
-                ready, 3081, cookie_status
+                "{{\"status\":\"ok\",\"ready\":{},\"agent_port\":{},\"cookie\":\"{}\",                 \"agent_token\":{},\"proxy_uptime\":\"healthy\"}}",
+                ready, 3081, cookie_status, has_agent_token
             );
             let v: serde_json::Value =
                 serde_json::from_str(&payload).expect("health 响应必须是合法 JSON");
             assert_eq!(v["ready"].as_bool().unwrap(), ready);
             assert_eq!(v["cookie"].as_str().unwrap(), cookie_status);
+            // agent_token 用于区分「上游未就绪」与「token 未解析到」——后者再重试也好不了。
+            assert_eq!(v["agent_token"].as_bool().unwrap(), has_agent_token);
         }
 
         // 回归护栏：旧格式（cookie 值未加引号）确实不是合法 JSON
